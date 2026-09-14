@@ -113,6 +113,7 @@ import {
   type ProviderRuntimeSettings,
 } from "../provider-launch-config.js";
 import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
+import type { ProviderSubagentInputEvent } from "../provider-subagents/store.js";
 import { appendOrReplaceGrowingAssistantMessage, runProviderTurn } from "./provider-runner.js";
 import {
   buildStringCommandShellInvocation,
@@ -239,6 +240,16 @@ export const DEFAULT_ACP_CAPABILITIES: AgentCapabilityFlags = {
   supportsRewindFiles: false,
   supportsRewindBoth: false,
 };
+
+/**
+ * Extension-notification method an external ACP provider uses to declare
+ * provider-owned child work. The payload is a session-scoped batch of
+ * provider-subagent input events (`{ sessionId, provider, events }`) — the same
+ * vocabulary the native adapters emit as `provider_subagent` stream events, so
+ * the client renders them through the existing subagents track unchanged.
+ * Providers that never send the method are unaffected.
+ */
+export const ACP_PROVIDER_SUBAGENT_METHOD = "_dsh/sdk/subagent/update";
 
 function acpSessionListRequest(cursor: string | null | undefined, cwd: string | undefined) {
   return {
@@ -2563,6 +2574,42 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       this.applyResolvedCommands(parsedCommands, {
         sessionId: typeof params.sessionId === "string" ? params.sessionId : undefined,
       });
+    }
+
+    if (method === ACP_PROVIDER_SUBAGENT_METHOD) {
+      this.applyProviderSubagentBatch(params);
+    }
+  }
+
+  // Forward a provider-declared subagent batch into the same store the native
+  // adapters feed. The batch is session-scoped, so a notification addressed to
+  // another session is ignored, and an event the store cannot classify is
+  // dropped rather than minting a descriptor without a usable identity.
+  private applyProviderSubagentBatch(params: Record<string, unknown>): void {
+    const sessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+    if (sessionId !== undefined && this.sessionId !== null && sessionId !== this.sessionId) {
+      return;
+    }
+    if (!Array.isArray(params.events)) {
+      return;
+    }
+    const provider = typeof params.provider === "string" ? params.provider : this.provider;
+    for (const event of params.events) {
+      if (event === null || typeof event !== "object") {
+        continue;
+      }
+      const candidate = event as ProviderSubagentInputEvent;
+      if (typeof candidate.id !== "string" || candidate.id.length === 0) {
+        continue;
+      }
+      if (
+        candidate.type !== "upsert" &&
+        candidate.type !== "timeline" &&
+        candidate.type !== "remove"
+      ) {
+        continue;
+      }
+      this.pushEvent({ type: "provider_subagent", provider, event: candidate });
     }
   }
 
