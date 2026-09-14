@@ -707,6 +707,46 @@ describe("mapACPUsage", () => {
   });
 });
 
+describe("ACP context-window usage", () => {
+  function captureUsageEvents(provider: string): {
+    internals: ACPSessionInternals;
+    events: unknown[];
+  } {
+    const session = createSessionWithConfig({ provider });
+    const events: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "usage_updated") events.push(event);
+    });
+    return { internals: asInternals<ACPSessionInternals>(session), events };
+  }
+
+  test("forwards usage_update as context-window usage state", () => {
+    const { internals, events } = captureUsageEvents("dsh");
+
+    internals.translateSessionUpdate({
+      sessionUpdate: "usage_update",
+      used: 13_759,
+      size: 1_000_000,
+    });
+
+    expect(events).toEqual([
+      {
+        type: "usage_updated",
+        provider: "dsh",
+        usage: { contextWindowMaxTokens: 1_000_000, contextWindowUsedTokens: 13_759 },
+      },
+    ]);
+  });
+
+  test("emits nothing when neither size nor used can drive a meter", () => {
+    const { internals, events } = captureUsageEvents("dsh");
+
+    internals.translateSessionUpdate({ sessionUpdate: "usage_update", used: -1, size: 0 });
+
+    expect(events).toEqual([]);
+  });
+});
+
 describe("deriveModesFromACP", () => {
   test("prefers explicit ACP mode state", () => {
     const result = deriveModesFromACP(
