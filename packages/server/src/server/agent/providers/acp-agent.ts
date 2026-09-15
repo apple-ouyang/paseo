@@ -215,6 +215,21 @@ export function isACPTransportRetryableErrorMessage(message: string): boolean {
   return ACP_TRANSPORT_RETRYABLE_ERROR_RE.test(text);
 }
 
+/** Cursor ACP often prints only `Error: RetriableError: ...` and then ends the turn. */
+export function isACPTransportRetryableAssistantText(text: string): boolean {
+  const lines = text
+    .trim()
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0 || lines.length > 4) {
+    return false;
+  }
+  return lines.every(
+    (line) => /^error:\s*retriableerror\b/i.test(line) && isACPTransportRetryableErrorMessage(line),
+  );
+}
+
 function delayMs(ms: number): Promise<void> {
   if (ms <= 0) {
     return Promise.resolve();
@@ -1712,6 +1727,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private activeForegroundTurnId: string | null = null;
   private fallbackAssistantMessageId: string | null = null;
   private currentTurnAssistantText = "";
+  private attemptEmittedAssistantOutput = false;
   private toolCallCountAtTurnStart = 0;
   private transportRetryDelaysMs: number[] = [...ACP_TRANSPORT_RETRY_DELAYS_MS];
   private closed = false;
@@ -1911,18 +1927,19 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     const promptBlocks = toACPContentBlocks(input.prompt);
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      if (this.closed || this.activeForegroundTurnId !== input.turnId) {
+      if (!this.isForegroundTurnActive(input.turnId)) {
         return;
       }
 
       this.currentTurnAssistantText = "";
+      this.attemptEmittedAssistantOutput = false;
       try {
         const response = await this.connection.prompt({
           sessionId: this.sessionId,
           messageId: attempt === 0 ? input.messageId : randomUUID(),
           prompt: promptBlocks,
         });
-        if (this.closed || this.activeForegroundTurnId !== input.turnId) {
+        if (!this.isForegroundTurnActive(input.turnId)) {
           return;
         }
         if (attempt < delays.length && this.shouldRetryCompletedPrompt(response)) {
@@ -1933,15 +1950,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         this.handlePromptResponse(response, input.turnId);
         return;
       } catch (error) {
-        if (this.closed || this.activeForegroundTurnId !== input.turnId) {
+        if (!this.isForegroundTurnActive(input.turnId)) {
           return;
         }
         const summary = summarizeACPRequestError(error);
-        if (
-          attempt < delays.length &&
-          !this.turnStartedToolCalls() &&
-          isACPTransportRetryableErrorMessage(summary.message)
-        ) {
+        if (this.shouldRetryRejectedPrompt(attempt, delays.length, summary.message)) {
           this.emitTransportRetry(attempt + 1, input.turnId, summary.message);
           await delayMs(delays[attempt] ?? 0);
           continue;
@@ -1959,6 +1972,19 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
   }
 
+  private isForegroundTurnActive(turnId: string): boolean {
+    return !this.closed && this.activeForegroundTurnId === turnId;
+  }
+
+  private shouldRetryRejectedPrompt(attempt: number, maxRetries: number, message: string): boolean {
+    return (
+      attempt < maxRetries &&
+      !this.turnStartedToolCalls() &&
+      !this.attemptEmittedAssistantOutput &&
+      isACPTransportRetryableErrorMessage(message)
+    );
+  }
+
   private shouldRetryCompletedPrompt(response: PromptResponse): boolean {
     if (response.stopReason === "cancelled") {
       return false;
@@ -1966,7 +1992,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (this.turnStartedToolCalls()) {
       return false;
     }
-    return isACPTransportRetryableErrorMessage(this.currentTurnAssistantText);
+    return isACPTransportRetryableAssistantText(this.currentTurnAssistantText);
   }
 
   private turnStartedToolCalls(): boolean {
@@ -3106,6 +3132,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
     if (type === "assistant_message") {
       this.currentTurnAssistantText += chunkText;
+      this.attemptEmittedAssistantOutput = true;
       return {
         type: "assistant_message",
         text: chunkText,

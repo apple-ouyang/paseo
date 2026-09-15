@@ -28,6 +28,7 @@ import {
   resolveACPModeSelection,
   resolveACPModelSelection,
   summarizeACPRequestError,
+  isACPTransportRetryableAssistantText,
   isACPTransportRetryableErrorMessage,
 } from "./acp-agent.js";
 import type { ProcessTerminator, TreeKillTarget } from "../../../utils/tree-kill.js";
@@ -105,6 +106,19 @@ describe("isACPTransportRetryableErrorMessage", () => {
     "Please sign in to continue",
   ])("does not retry %s", (message) => {
     expect(isACPTransportRetryableErrorMessage(message)).toBe(false);
+  });
+
+  test("retries only a Cursor-style error-only assistant message", () => {
+    expect(
+      isACPTransportRetryableAssistantText(
+        "Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms",
+      ),
+    ).toBe(true);
+    expect(
+      isACPTransportRetryableAssistantText(
+        "The previous attempt failed with RetriableError after a TLS reset. I will continue from the last file.",
+      ),
+    ).toBe(false);
   });
 });
 
@@ -3267,6 +3281,36 @@ describe("ACPAgentSession", () => {
     });
     await expectTurnCompleted(events, turnId);
     expect(events.filter((event) => event.type === "turn_failed")).toEqual([]);
+  });
+
+  test("does not retry a completed answer that merely mentions a transport error", async () => {
+    const session = createSession();
+    const events: AgentStreamEvent[] = [];
+    const prompt = vi.fn(async () => {
+      await session.sessionUpdate({
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: "The previous attempt failed with RetriableError after a TLS reset. I will continue from the last file.",
+          },
+        } as SessionUpdate,
+      });
+      return { stopReason: "end_turn" } satisfies PromptResponse;
+    });
+
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).transportRetryDelaysMs = [0, 0];
+    session.subscribe((event) => events.push(event));
+
+    const { turnId } = await session.startTurn("hello");
+    await expectTurnCompleted(events, turnId);
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(
+      events.filter((event) => event.type === "timeline" && event.item.type === "error"),
+    ).toEqual([]);
   });
 
   test("does not retry non-transport ACP prompt failures", async () => {
