@@ -3078,7 +3078,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       Number.isFinite(update.size) && update.size > 0 ? update.size : undefined;
     const contextWindowUsedTokens =
       Number.isFinite(update.used) && update.used >= 0 ? update.used : undefined;
-    if (contextWindowMaxTokens === undefined && contextWindowUsedTokens === undefined) {
+    if (contextWindowMaxTokens === undefined || contextWindowUsedTokens === undefined) {
       return;
     }
     this.pushEvent({
@@ -3086,8 +3086,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       provider: this.provider,
       usage: {
         ...this.currentTurnUsage,
-        ...(contextWindowMaxTokens === undefined ? {} : { contextWindowMaxTokens }),
-        ...(contextWindowUsedTokens === undefined ? {} : { contextWindowUsedTokens }),
+        contextWindowMaxTokens,
+        contextWindowUsedTokens,
       },
       turnId: this.activeForegroundTurnId ?? undefined,
     });
