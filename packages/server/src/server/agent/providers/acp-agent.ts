@@ -203,7 +203,9 @@ const ACP_NON_RETRYABLE_ERROR_RE =
   /not logged in|please sign in|authentication failed|auth_required|unauthorized|permission denied|rate limit|quota|upgrade your plan/i;
 
 const ACP_TRANSPORT_RETRYABLE_ERROR_RE =
-  /retriableerror|keepalive ping timed out|ping timed out|disconnected before secure tls connection was established|\[(?:aborted|internal|unavailable)\].*(?:tls|socket|econnreset|http\/2|connection|ping)|econnreset|socket hang up|connect econnrefused|connect etimedout|http\/2 stream closed|connection stalled/i;
+  /retriableerror|keepalive ping timed out|ping timed out|disconnected before secure tls connection was established|\[(?:aborted|internal|unavailable)\].*(?:tls|socket|econnreset|http\/2|connection|ping)|econnreset|socket hang up|connect econnrefused|connect etimedout|http\/2 stream closed|connection stalled|stream ended without turnended/i;
+
+const ACP_APPROXIMATED_CONTEXT_WINDOW_TOKENS = 256_000;
 
 export function isACPTransportRetryableErrorMessage(message: string): boolean {
   const text = message.trim();
@@ -982,7 +984,7 @@ export class ACPAgentClient implements AgentClient {
     this.providerModeWriter = options.providerModeWriter;
     this.beforeModeWriter = options.beforeModeWriter;
     this.thinkingOptionWriter = options.thinkingOptionWriter;
-    this.waitForInitialCommands = options.waitForInitialCommands ?? false;
+    this.waitForInitialCommands = options.waitForInitialCommands ?? true;
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
     this.now = options.now ?? Date.now;
@@ -1741,6 +1743,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private attemptEmittedAssistantOutput = false;
   private toolCallCountAtTurnStart = 0;
   private transportRetryDelaysMs: number[] = [...ACP_TRANSPORT_RETRY_DELAYS_MS];
+  private receivedRealUsageUpdate = false;
+  private approximatedContextChars = 0;
   private closed = false;
   private historyPending = false;
   private replayingHistory = false;
@@ -1775,7 +1779,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.currentModel = config.model ?? null;
     this.thinkingOptionId = config.thinkingOptionId ?? null;
     this.currentTitle = config.title ?? null;
-    this.waitForInitialCommands = options.waitForInitialCommands ?? false;
+    this.waitForInitialCommands = options.waitForInitialCommands ?? true;
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
   }
@@ -3093,14 +3097,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
           name: command.name,
           description: command.description,
           argumentHint: "",
-          // ACP has no first-class command kind. Generic agents whose published
-          // commands are skills (dsh) tag them in the reserved `_meta` bag; the
-          // composer only offers `kind: "skill"` entries inline mid-prompt, so
-          // an untagged command would match at the prompt start only.
+          // Composer inline `/` only offers `kind: "skill"`. Cursor / Grok omit
+          // `_meta.kind`, so default untagged commands to skill and keep only an
+          // explicit `_meta.kind === "command"` out of mid-prompt completion.
           kind:
-            (command._meta as { kind?: unknown } | null | undefined)?.kind === "skill"
-              ? "skill"
-              : "command",
+            (command._meta as { kind?: unknown } | null | undefined)?.kind === "command"
+              ? "command"
+              : "skill",
         }));
         this.settleCommandsReady();
         return pendingUserEvents;
@@ -3269,6 +3272,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (contextWindowMaxTokens === undefined || contextWindowUsedTokens === undefined) {
       return;
     }
+    this.receivedRealUsageUpdate = true;
     this.pushEvent({
       type: "usage_updated",
       provider: this.provider,
@@ -3331,6 +3335,33 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     );
     for (const subscriber of this.subscribers) {
       subscriber(event);
+    }
+    this.maybeApproximateContextUsage(event);
+  }
+
+  private maybeApproximateContextUsage(event: AgentStreamEvent): void {
+    if (this.receivedRealUsageUpdate || !this.activeForegroundTurnId || event.type !== "timeline") {
+      return;
+    }
+    const text = "text" in event.item && typeof event.item.text === "string" ? event.item.text : "";
+    if (text.length === 0) {
+      return;
+    }
+    this.approximatedContextChars += text.length;
+    const contextWindowUsedTokens = (this.approximatedContextChars / 4) | 0;
+    if (contextWindowUsedTokens === 0) {
+      return;
+    }
+    for (const subscriber of this.subscribers) {
+      subscriber({
+        type: "usage_updated",
+        provider: this.provider,
+        usage: {
+          contextWindowMaxTokens: ACP_APPROXIMATED_CONTEXT_WINDOW_TOKENS,
+          contextWindowUsedTokens,
+        },
+        turnId: this.activeForegroundTurnId ?? undefined,
+      });
     }
   }
 

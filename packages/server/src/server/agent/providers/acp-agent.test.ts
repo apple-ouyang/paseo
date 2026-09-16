@@ -95,6 +95,8 @@ describe("isACPTransportRetryableErrorMessage", () => {
   test.each([
     "RetriableError: [aborted] Client network socket disconnected before secure TLS connection was established",
     "Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms",
+    "Error: RetriableError: Connection stalled",
+    "Error: RetriableError: Stream ended without turnEnded — connection likely dropped mid-stream",
     "ConnectError: [unavailable] PING timed out",
     "read ECONNRESET",
   ])("retries %s", (message) => {
@@ -113,6 +115,14 @@ describe("isACPTransportRetryableErrorMessage", () => {
     expect(
       isACPTransportRetryableAssistantText(
         "Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms",
+      ),
+    ).toBe(true);
+    expect(isACPTransportRetryableAssistantText("Error: RetriableError: Connection stalled")).toBe(
+      true,
+    );
+    expect(
+      isACPTransportRetryableAssistantText(
+        "Error: RetriableError: Stream ended without turnEnded — connection likely dropped mid-stream",
       ),
     ).toBe(true);
     expect(
@@ -789,6 +799,55 @@ describe("ACP context-window usage", () => {
     await expect(
       emitUsageUpdate({ used: 13_759, size: 0 }).then((result) => result.events),
     ).resolves.toEqual([]);
+  });
+
+  test("approximates context usage from timeline text until a real usage_update arrives", async () => {
+    const session = createSessionWithConfig({ provider: "cursor" });
+    const events: unknown[] = [];
+    const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    session.subscribe((event) => {
+      if (event.type === "usage_updated") events.push(event);
+    });
+
+    await session.startTurn("abcd");
+
+    expect(events).toEqual([
+      {
+        type: "usage_updated",
+        provider: "cursor",
+        usage: { contextWindowMaxTokens: 256_000, contextWindowUsedTokens: 1 },
+        turnId: expect.any(String),
+      },
+    ]);
+
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: { sessionUpdate: "usage_update", used: 13_759, size: 1_000_000 },
+    });
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "more text that must not keep approximating" },
+      } as SessionUpdate,
+    });
+
+    expect(events).toEqual([
+      {
+        type: "usage_updated",
+        provider: "cursor",
+        usage: { contextWindowMaxTokens: 256_000, contextWindowUsedTokens: 1 },
+        turnId: expect.any(String),
+      },
+      {
+        type: "usage_updated",
+        provider: "cursor",
+        usage: { contextWindowMaxTokens: 1_000_000, contextWindowUsedTokens: 13_759 },
+        turnId: expect.any(String),
+      },
+    ]);
   });
 });
 
@@ -2478,6 +2537,11 @@ describe("ACPAgentSession slash commands", () => {
           description: "Review the staged change",
           _meta: { kind: "skill" },
         },
+        {
+          name: "compact",
+          description: "Compact the conversation",
+          _meta: { kind: "command" },
+        },
       ],
     });
 
@@ -2486,19 +2550,25 @@ describe("ACPAgentSession slash commands", () => {
         name: "research_codebase",
         description: "Search the workspace for relevant files",
         argumentHint: "",
-        kind: "command",
+        kind: "skill",
       },
       {
         name: "create_plan",
         description: "Draft a plan for the requested work",
         argumentHint: "",
-        kind: "command",
+        kind: "skill",
       },
       {
         name: "review-commit",
         description: "Review the staged change",
         argumentHint: "",
         kind: "skill",
+      },
+      {
+        name: "compact",
+        description: "Compact the conversation",
+        argumentHint: "",
+        kind: "command",
       },
     ]);
 
@@ -2507,19 +2577,25 @@ describe("ACPAgentSession slash commands", () => {
         name: "research_codebase",
         description: "Search the workspace for relevant files",
         argumentHint: "",
-        kind: "command",
+        kind: "skill",
       },
       {
         name: "create_plan",
         description: "Draft a plan for the requested work",
         argumentHint: "",
-        kind: "command",
+        kind: "skill",
       },
       {
         name: "review-commit",
         description: "Review the staged change",
         argumentHint: "",
         kind: "skill",
+      },
+      {
+        name: "compact",
+        description: "Compact the conversation",
+        argumentHint: "",
+        kind: "command",
       },
     ]);
   });
@@ -3320,16 +3396,17 @@ describe("ACPAgentSession", () => {
     expect(asInternals<ACPSessionInternals>(session).activeForegroundTurnId).toBeNull();
   });
 
-  test("retries ACP prompt transport failures then completes the same turn", async () => {
+  test.each([
+    "RetriableError: [aborted] Client network socket disconnected before secure TLS connection was established",
+    "Error: RetriableError: Connection stalled",
+    "Error: RetriableError: Stream ended without turnEnded — connection likely dropped mid-stream",
+    "Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms",
+  ])("retries ACP prompt transport failures for %s", async (message) => {
     const session = createSession();
     const events: AgentStreamEvent[] = [];
     const prompt = vi
       .fn()
-      .mockRejectedValueOnce(
-        new Error(
-          "RetriableError: [aborted] Client network socket disconnected before secure TLS connection was established",
-        ),
-      )
+      .mockRejectedValueOnce(new Error(message))
       .mockResolvedValueOnce({ stopReason: "end_turn" } satisfies PromptResponse);
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";

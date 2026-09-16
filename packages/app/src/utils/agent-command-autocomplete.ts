@@ -79,7 +79,7 @@ export function filterAndRankCommandAutocompleteEntries<TEntry extends CommandAu
 export function filterInlineSkillCommandEntries<TEntry extends InlineSkillCommandEntry>(
   entries: readonly TEntry[],
 ): TEntry[] {
-  return entries.filter((entry) => entry.source === "provider" && entry.command.kind === "skill");
+  return entries.filter((entry) => entry.source === "provider");
 }
 
 const INVALID_SLASH_COMMAND_QUERY_CHARS = /[/\s\n\r\t"']/;

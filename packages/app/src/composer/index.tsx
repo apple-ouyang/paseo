@@ -1508,7 +1508,7 @@ function ComposerContentImpl({
   const isCancellingAgent = useSessionStore(
     (state) => selectAgentTurnPresentation(state.sessions[serverId], agentId).isCancelling,
   );
-  const isAgentRunning = hasActiveTurn;
+  const isAgentRunning = hasActiveTurn || agentState.status === "running";
   // Queueing behind a permission prompt would strand the message: the turn is
   // parked until the request is answered.
   const hasPendingPermission = useSessionStore((state) => {

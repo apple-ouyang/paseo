@@ -28,13 +28,13 @@ describe("GenericACPAgentClient slash commands", () => {
             name: "research_codebase",
             description: "Search the workspace for relevant files",
             argumentHint: "",
-            kind: "command",
+            kind: "skill",
           },
           {
             name: "create_plan",
             description: "Draft a plan for the requested work",
             argumentHint: "",
-            kind: "command",
+            kind: "skill",
           },
         ]);
       } finally {
