@@ -708,26 +708,25 @@ describe("mapACPUsage", () => {
 });
 
 describe("ACP context-window usage", () => {
-  function captureUsageEvents(provider: string): {
-    internals: ACPSessionInternals;
-    events: unknown[];
-  } {
-    const session = createSessionWithConfig({ provider });
+  async function emitUsageUpdate(update: {
+    used: number;
+    size: number;
+  }): Promise<{ events: unknown[] }> {
+    const session = createSessionWithConfig({ provider: "dsh" });
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
     const events: unknown[] = [];
     session.subscribe((event) => {
       if (event.type === "usage_updated") events.push(event);
     });
-    return { internals: asInternals<ACPSessionInternals>(session), events };
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: { sessionUpdate: "usage_update", used: update.used, size: update.size },
+    });
+    return { events };
   }
 
-  test("forwards usage_update as context-window usage state", () => {
-    const { internals, events } = captureUsageEvents("dsh");
-
-    internals.translateSessionUpdate({
-      sessionUpdate: "usage_update",
-      used: 13_759,
-      size: 1_000_000,
-    });
+  test("forwards usage_update as context-window usage state", async () => {
+    const { events } = await emitUsageUpdate({ used: 13_759, size: 1_000_000 });
 
     expect(events).toEqual([
       {
@@ -738,12 +737,13 @@ describe("ACP context-window usage", () => {
     ]);
   });
 
-  test("emits nothing when neither size nor used can drive a meter", () => {
-    const { internals, events } = captureUsageEvents("dsh");
-
-    internals.translateSessionUpdate({ sessionUpdate: "usage_update", used: -1, size: 0 });
-
-    expect(events).toEqual([]);
+  test("emits nothing when size and used cannot both drive a meter", async () => {
+    await expect(
+      emitUsageUpdate({ used: -1, size: 0 }).then((result) => result.events),
+    ).resolves.toEqual([]);
+    await expect(
+      emitUsageUpdate({ used: 13_759, size: 0 }).then((result) => result.events),
+    ).resolves.toEqual([]);
   });
 });
 
@@ -1835,10 +1835,9 @@ describe("ACPAgentClient modelTransformer", () => {
 
 describe("ACPAgentClient catalog discovery without a model resolver", () => {
   test("never switches models during catalog discovery even with multiple models and a thinking picker", async () => {
-    // The per-model probing that switches models lives on KimiACPAgentClient
-    // (see kimi-acp-agent.test.ts). The base client ships no catalog model resolver, so a
-    // slow or nonconforming ACP can't stall its catalog probe on extra setSessionConfigOption
-    // round trips.
+    // Model discovery extensions live on providers that opt in. The base
+    // client ships no catalog model resolver, so a slow or nonconforming ACP can't
+    // stall its catalog probe on extra setSessionConfigOption round trips.
     const setSessionConfigOption = vi.fn();
 
     class TestACPAgentClient extends ACPAgentClient {
