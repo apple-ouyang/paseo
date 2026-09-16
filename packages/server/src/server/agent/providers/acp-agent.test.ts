@@ -18,6 +18,7 @@ import {
 import {
   ACPAgentClient,
   ACPAgentSession,
+  ACP_PROVIDER_SUBAGENT_METHOD,
   type SpawnedACPProcess,
   type SessionStateResponse,
   buildACPClientCapabilities,
@@ -703,6 +704,46 @@ describe("mapACPUsage", () => {
       outputTokens: 7,
       cachedInputTokens: 5,
     });
+  });
+});
+
+describe("ACP context-window usage", () => {
+  function captureUsageEvents(provider: string): {
+    internals: ACPSessionInternals;
+    events: unknown[];
+  } {
+    const session = createSessionWithConfig({ provider });
+    const events: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "usage_updated") events.push(event);
+    });
+    return { internals: asInternals<ACPSessionInternals>(session), events };
+  }
+
+  test("forwards usage_update as context-window usage state", () => {
+    const { internals, events } = captureUsageEvents("dsh");
+
+    internals.translateSessionUpdate({
+      sessionUpdate: "usage_update",
+      used: 13_759,
+      size: 1_000_000,
+    });
+
+    expect(events).toEqual([
+      {
+        type: "usage_updated",
+        provider: "dsh",
+        usage: { contextWindowMaxTokens: 1_000_000, contextWindowUsedTokens: 13_759 },
+      },
+    ]);
+  });
+
+  test("emits nothing when neither size nor used can drive a meter", () => {
+    const { internals, events } = captureUsageEvents("dsh");
+
+    internals.translateSessionUpdate({ sessionUpdate: "usage_update", used: -1, size: 0 });
+
+    expect(events).toEqual([]);
   });
 });
 
@@ -2564,6 +2605,69 @@ describe("ACPAgentSession", () => {
     });
 
     expect(await session.listCommands()).toEqual([]);
+  });
+
+  test("forwards a provider-declared subagent batch as provider_subagent events", async () => {
+    const session = createSessionWithConfig({ provider: "dsh" });
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    const events: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "provider_subagent") events.push(event);
+    });
+
+    await session.extNotification(ACP_PROVIDER_SUBAGENT_METHOD, {
+      sessionId: "session-1",
+      provider: "dsh",
+      events: [
+        { type: "upsert", id: "child-1", status: "running", cwd: "/tmp/work" },
+        { type: "upsert", id: "child-1", title: "Explore the branch" },
+        { type: "timeline", id: "child-1", item: { type: "assistant_message", text: "done" } },
+        { type: "remove", id: "child-1" },
+        // Unclassifiable or identity-less entries are dropped, not forwarded.
+        { type: "nonsense", id: "child-2" },
+        { type: "upsert" },
+        null,
+      ],
+    });
+
+    expect(events).toEqual([
+      {
+        type: "provider_subagent",
+        provider: "dsh",
+        event: { type: "upsert", id: "child-1", status: "running", cwd: "/tmp/work" },
+      },
+      {
+        type: "provider_subagent",
+        provider: "dsh",
+        event: { type: "upsert", id: "child-1", title: "Explore the branch" },
+      },
+      {
+        type: "provider_subagent",
+        provider: "dsh",
+        event: {
+          type: "timeline",
+          id: "child-1",
+          item: { type: "assistant_message", text: "done" },
+        },
+      },
+      { type: "provider_subagent", provider: "dsh", event: { type: "remove", id: "child-1" } },
+    ]);
+  });
+
+  test("ignores a provider-declared subagent batch for a different session", async () => {
+    const session = createSessionWithConfig({ provider: "dsh" });
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    const events: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "provider_subagent") events.push(event);
+    });
+
+    await session.extNotification(ACP_PROVIDER_SUBAGENT_METHOD, {
+      sessionId: "other-session",
+      events: [{ type: "upsert", id: "child-1" }],
+    });
+
+    expect(events).toEqual([]);
   });
 
   test("settles listCommands() immediately on an empty Kiro commands batch", async () => {
