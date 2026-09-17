@@ -12,6 +12,7 @@ const overflowingStrip = {
   deltaY: 120,
   deltaMode: 0,
   shiftKey: false,
+  ctrlKey: false,
 };
 
 describe("resolveWorkspaceTabsWheelScroll", () => {
@@ -48,12 +49,17 @@ describe("resolveWorkspaceTabsWheelScroll", () => {
     });
   });
 
-  it("leaves horizontal gestures to the browser", () => {
+  it("leaves horizontal gestures and browser zoom to the browser", () => {
     expect(resolveWorkspaceTabsWheelScroll({ ...overflowingStrip, deltaX: 40 })).toEqual({
       scrollLeft: 0,
       handled: false,
     });
     expect(resolveWorkspaceTabsWheelScroll({ ...overflowingStrip, shiftKey: true })).toEqual({
+      scrollLeft: 0,
+      handled: false,
+    });
+    // macOS trackpad pinch and Windows/Linux ctrl+wheel emit ctrlKey wheel events.
+    expect(resolveWorkspaceTabsWheelScroll({ ...overflowingStrip, ctrlKey: true })).toEqual({
       scrollLeft: 0,
       handled: false,
     });
@@ -77,22 +83,35 @@ describe("resolveWorkspaceTabsWheelScroll", () => {
 });
 
 describe("resolveWorkspaceTabsScrollElement", () => {
+  function scrollElement() {
+    return {
+      scrollLeft: 0,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    };
+  }
+
   it("prefers the node exposed by a React Native Web ScrollView ref", () => {
-    const node = { scrollLeft: 0 } as unknown as HTMLElement;
+    const node = scrollElement();
     const handle = { getScrollableNode: () => node };
 
     expect(resolveWorkspaceTabsScrollElement(handle)).toBe(node);
   });
 
   it("uses the ref directly when it already is the scrollable element", () => {
-    const node = { scrollLeft: 0 } as unknown as HTMLElement;
+    const node = scrollElement();
 
     expect(resolveWorkspaceTabsScrollElement(node)).toBe(node);
   });
 
-  it("returns null when the ref exposes no element", () => {
+  it("returns null when the ref exposes no scrollable element", () => {
     expect(resolveWorkspaceTabsScrollElement(null)).toBeNull();
     expect(resolveWorkspaceTabsScrollElement(undefined)).toBeNull();
     expect(resolveWorkspaceTabsScrollElement({ getScrollableNode: () => null })).toBeNull();
+    // A ref shape without `addEventListener` cannot hold the wheel listener.
+    expect(resolveWorkspaceTabsScrollElement({ scrollLeft: 0 })).toBeNull();
+    expect(
+      resolveWorkspaceTabsScrollElement({ getScrollableNode: () => ({ scrollLeft: 0 }) }),
+    ).toBeNull();
   });
 });
