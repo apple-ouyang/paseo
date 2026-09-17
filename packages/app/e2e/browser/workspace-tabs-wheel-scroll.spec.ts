@@ -25,10 +25,11 @@ test("a vertical mouse wheel pans the overflowing workspace tab strip", async ({
     const scrollLeft = () => strip.evaluate((element) => element.scrollLeft);
     await expect.poll(overflow).toBeGreaterThan(0);
 
-    const before = await scrollLeft();
+    // Nothing auto-scrolls the strip to the newest tab yet, so the leading edge is the start.
+    expect(await scrollLeft()).toBe(0);
     await strip.hover();
     await page.mouse.wheel(0, 200);
-    await expect.poll(scrollLeft).toBeGreaterThan(before);
+    await expect.poll(scrollLeft).toBeGreaterThan(0);
 
     // The far edge is reachable, so every tab can be brought into view.
     await page.mouse.wheel(0, await overflow());
