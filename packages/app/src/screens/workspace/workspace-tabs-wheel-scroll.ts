@@ -16,6 +16,7 @@ export interface WorkspaceTabsWheelScrollInput {
   deltaY: number;
   deltaMode: number;
   shiftKey: boolean;
+  ctrlKey: boolean;
 }
 
 export interface WorkspaceTabsWheelScrollResult {
@@ -48,7 +49,7 @@ export function resolveWorkspaceTabsWheelScroll(
   if (maxScrollLeft <= 0) {
     return { scrollLeft: currentScrollLeft, handled: false };
   }
-  if (input.shiftKey || input.deltaX !== 0) {
+  if (input.shiftKey || input.ctrlKey || input.deltaX !== 0) {
     return { scrollLeft: currentScrollLeft, handled: false };
   }
   let delta = input.deltaY;
@@ -67,7 +68,8 @@ export function resolveWorkspaceTabsWheelScroll(
 /**
  * A React Native Web ScrollView ref resolves to the ScrollView instance, whose
  * `getScrollableNode()` returns the overflowing element. A platform that hands back the
- * element itself (or a test double) is used as-is.
+ * element itself (or a test double) is used as-is; anything without an `addEventListener`
+ * is not a scrollable element and is ignored.
  */
 export function resolveWorkspaceTabsScrollElement(handle: unknown): HTMLElement | null {
   if (!handle || typeof handle !== "object") {
@@ -76,9 +78,17 @@ export function resolveWorkspaceTabsScrollElement(handle: unknown): HTMLElement 
   const scrollableNode = (handle as { getScrollableNode?: () => unknown }).getScrollableNode;
   if (typeof scrollableNode === "function") {
     const node = scrollableNode.call(handle);
-    return node && typeof node === "object" ? (node as HTMLElement) : null;
+    return isScrollElement(node) ? node : null;
   }
-  return handle as HTMLElement;
+  return isScrollElement(handle) ? handle : null;
+}
+
+function isScrollElement(candidate: unknown): candidate is HTMLElement {
+  return (
+    Boolean(candidate) &&
+    typeof candidate === "object" &&
+    typeof (candidate as { addEventListener?: unknown }).addEventListener === "function"
+  );
 }
 
 /**
@@ -108,6 +118,7 @@ export function useWorkspaceTabsWheelScroll(enabled: boolean): RefObject<ScrollV
         deltaY: event.deltaY,
         deltaMode: event.deltaMode,
         shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
       });
       if (!result.handled) {
         return;
