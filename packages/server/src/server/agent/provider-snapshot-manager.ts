@@ -815,7 +815,12 @@ export class ProviderSnapshotManager {
     definitions: Record<AgentProvider, ProviderDefinition>,
     overrides: Record<string, ProviderOverride> | undefined,
   ): RegistryGeneration {
-    const order = Object.keys(definitions);
+    // `agents.providers.<id>.order` (ProviderOverrideSchema) drives the order the snapshot
+    // exposes providers in. Providers without an order keep the builtin-then-derived
+    // definition order and land after every explicitly ordered provider.
+    const order = Object.keys(definitions).sort(
+      (a, b) => (overrides?.[a]?.order ?? 9000) - (overrides?.[b]?.order ?? 9000),
+    );
     const providerStates = new Map<
       AgentProvider,
       { initial: ProviderSnapshotRecord; discoveryLimit: LimitFunction }
