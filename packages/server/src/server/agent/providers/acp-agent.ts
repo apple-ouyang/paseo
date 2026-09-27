@@ -2561,13 +2561,14 @@ export class ACPAgentSession implements AgentSession, ACPClient {
             continue;
           }
           const text = capReplayReasoningText(event.item.text, remaining);
-          if (!text) {
-            continue;
-          }
-          this.replayedReasoningChars +=
+          const consumed =
             event.item.text.length > remaining || text.length !== event.item.text.length
               ? remaining
               : text.length;
+          this.replayedReasoningChars += consumed;
+          if (!text) {
+            continue;
+          }
           this.persistedHistory.push({ ...event.item, text });
         } else {
           this.persistedHistory.push(event.item);
