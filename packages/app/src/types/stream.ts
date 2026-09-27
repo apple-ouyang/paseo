@@ -7,6 +7,7 @@ import type {
 import { timelineItemIdentity } from "@getpaseo/protocol/timeline-identity";
 import type { AgentAttachment, AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import type { AttachmentMetadata } from "@/attachments/types";
+import { capAssistantMessageForRender } from "@/components/assistant-message-render-limit";
 import { extractTaskEntriesFromToolCall } from "../utils/tool-call-parsers";
 
 /**
@@ -979,7 +980,7 @@ function appendThought(
   timestamp: Date,
   timelineCursor?: TimelinePosition,
 ): StreamItem[] {
-  const { chunk, hasContent } = normalizeChunk(text);
+  const { chunk, hasContent } = normalizeChunk(capAssistantMessageForRender(text).text);
   if (!chunk) {
     return state;
   }
@@ -989,7 +990,7 @@ function appendThought(
     const updated: ThoughtItem = {
       ...last,
       ...(timelineCursor ? { timelineCursor } : {}),
-      text: `${last.text}${chunk}`,
+      text: capAssistantMessageForRender(`${last.text}${chunk}`).text,
       timestamp,
       status: "loading",
     };

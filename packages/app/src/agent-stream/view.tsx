@@ -53,6 +53,7 @@ import type {
 import type { AgentScreenAgent } from "@/hooks/use-agent-screen-state-machine";
 import { useSessionStore } from "@/stores/session-store";
 import { useRevealedText } from "@/hooks/use-revealed-text";
+import { capAssistantMessageForRender } from "@/components/assistant-message-render-limit";
 import { useFileExplorerActions } from "@/hooks/use-file-explorer-actions";
 import { useLoadOlderAgentHistory } from "@/hooks/use-load-older-agent-history";
 import { useSettings } from "@/hooks/use-settings";
@@ -1307,7 +1308,8 @@ function ThoughtSlot({
   isLastInSequence,
   defaultExpanded,
 }: ThoughtSlotProps) {
-  const revealedText = useRevealedText(text, status === "ready" ? "complete" : "streaming");
+  const renderedText = capAssistantMessageForRender(text).text;
+  const revealedText = useRevealedText(renderedText, status === "ready" ? "complete" : "streaming");
   return (
     <ToolCallSlot
       itemId={itemId}
