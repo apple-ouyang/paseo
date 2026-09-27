@@ -130,6 +130,9 @@ const ACP_AUTO_ACCEPT_FEATURE_ID = "auto_accept";
 const MAX_REPLAY_REASONING_CHARS = 32_000;
 
 function capReplayReasoningText(text: string, maxChars: number): string {
+  if (text.length < maxChars) {
+    return text;
+  }
   const capped = text.slice(0, maxChars);
   const lastCodeUnit = capped.charCodeAt(capped.length - 1);
   if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
@@ -2561,7 +2564,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
           if (!text) {
             continue;
           }
-          this.replayedReasoningChars += text.length;
+          this.replayedReasoningChars +=
+            event.item.text.length > remaining || text.length !== event.item.text.length
+              ? remaining
+              : text.length;
           this.persistedHistory.push({ ...event.item, text });
         } else {
           this.persistedHistory.push(event.item);

@@ -4046,13 +4046,15 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
   test("does not split a surrogate pair at the replay cap", async () => {
     let session!: ACPAgentSession;
     const loadSession = async () => {
-      await session.sessionUpdate({
-        sessionId: "session-1",
-        update: {
-          sessionUpdate: "agent_thought_chunk",
-          content: { type: "text", text: "r".repeat(31_999) + "😀" },
-        } as SessionUpdate,
-      });
+      for (const text of ["r".repeat(31_999) + "\ud83d", "\ude00"]) {
+        await session.sessionUpdate({
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text },
+          } as SessionUpdate,
+        });
+      }
       return {
         sessionId: "session-1",
         modes: null,
@@ -4079,6 +4081,45 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
     expect(reasoning).toHaveLength(1);
     expect(reasoning[0].item.text).toHaveLength(31_999);
     expect(reasoning[0].item.text).toBe("r".repeat(31_999));
+  });
+
+  test("preserves a surrogate pair split across replay chunks", async () => {
+    let session!: ACPAgentSession;
+    const loadSession = async () => {
+      for (const text of ["a\ud83d", "\ude00"]) {
+        await session.sessionUpdate({
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text },
+          } as SessionUpdate,
+        });
+      }
+      return {
+        sessionId: "session-1",
+        modes: null,
+        models: null,
+        configOptions: [],
+      };
+    };
+    ({ session } = makeTestSession({
+      capabilities: { loadSession: true },
+      handle: { sessionId: "session-1", provider: "claude-acp" },
+      loadSession,
+    }));
+
+    await session.initializeResumedSession();
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+    const reasoning = history.filter(
+      (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
+        event.type === "timeline" && event.item.type === "reasoning",
+    );
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning.map((event) => event.item.text).join("")).toBe("a😀");
   });
 
   test("coalesces an ID-less text and image user message during loadSession replay", async () => {
