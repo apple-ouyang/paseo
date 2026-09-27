@@ -129,6 +129,15 @@ import { withTimeout } from "../../../utils/promise-timeout.js";
 const ACP_AUTO_ACCEPT_FEATURE_ID = "auto_accept";
 const MAX_REPLAY_REASONING_CHARS = 32_000;
 
+function capReplayReasoningText(text: string, maxChars: number): string {
+  const capped = text.slice(0, maxChars);
+  const lastCodeUnit = capped.charCodeAt(capped.length - 1);
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
+    return capped.slice(0, -1);
+  }
+  return capped;
+}
+
 function assertChildWithPipes(
   child: ChildProcess,
 ): asserts child is ChildProcessWithoutNullStreams {
@@ -2548,7 +2557,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
           if (remaining <= 0) {
             continue;
           }
-          const text = event.item.text.slice(0, remaining);
+          const text = capReplayReasoningText(event.item.text, remaining);
           if (!text) {
             continue;
           }

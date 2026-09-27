@@ -4043,6 +4043,44 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
     expect(reasoning[1].item.text).toBe("s".repeat(12_000));
   });
 
+  test("does not split a surrogate pair at the replay cap", async () => {
+    let session!: ACPAgentSession;
+    const loadSession = async () => {
+      await session.sessionUpdate({
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "r".repeat(31_999) + "😀" },
+        } as SessionUpdate,
+      });
+      return {
+        sessionId: "session-1",
+        modes: null,
+        models: null,
+        configOptions: [],
+      };
+    };
+    ({ session } = makeTestSession({
+      capabilities: { loadSession: true },
+      handle: { sessionId: "session-1", provider: "claude-acp" },
+      loadSession,
+    }));
+
+    await session.initializeResumedSession();
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+    const reasoning = history.filter(
+      (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
+        event.type === "timeline" && event.item.type === "reasoning",
+    );
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0].item.text).toHaveLength(31_999);
+    expect(reasoning[0].item.text).toBe("r".repeat(31_999));
+  });
+
   test("coalesces an ID-less text and image user message during loadSession replay", async () => {
     let session!: ACPAgentSession;
     const loadSession = async () => {
