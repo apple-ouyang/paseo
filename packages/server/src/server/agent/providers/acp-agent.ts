@@ -336,6 +336,7 @@ const ACP_DIAGNOSTIC_PHASE_TIMEOUT_MS = 20_000;
 const ACP_PROBE_CLOSE_TIMEOUT_MS = 2_000;
 const ACP_IMPORT_HISTORY_LOAD_TIMEOUT_MS = 30_000;
 const ACP_IMPORT_HISTORY_BUDGET_MS = 60_000;
+const MAX_PRE_SESSION_UPDATES = 500;
 
 function summarizeMalformedACPStdoutError(error: unknown): { type: string; message: string } {
   return {
@@ -1749,6 +1750,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private historyPending = false;
   private replayingHistory = false;
   private bootstrapThreadEventPending = false;
+  // Devin CLI (and any agent that emits session-scoped updates while
+  // session/new is still in flight) delivers config_option_update /
+  // current_mode_update / available_commands_update before the response
+  // assigns sessionId. Notifications in that window would hit the
+  // mismatched-session drop in sessionUpdate(), so they are buffered here and
+  // replayed once the real id is known. Foreign-session updates still drop.
+  private preSessionUpdates: SessionNotification[] = [];
   private readonly terminateProcess: ProcessTerminator;
 
   constructor(config: AgentSessionConfig, options: ACPAgentSessionOptions) {
@@ -1802,11 +1810,20 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         }),
       );
       this.sessionId = response.sessionId;
+      await this.flushPreSessionUpdates();
       this.bootstrapThreadEventPending = true;
       this.applySessionState(response);
       await this.applyConfiguredOverrides();
     } catch (error) {
       await this.closeAfterInitializationFailure(error);
+    }
+  }
+
+  private async flushPreSessionUpdates(): Promise<void> {
+    const buffered = this.preSessionUpdates;
+    this.preSessionUpdates = [];
+    for (const params of buffered) {
+      await this.sessionUpdate(params);
     }
   }
 
@@ -2601,6 +2618,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.connection = null;
     this.child = null;
     this.activeForegroundTurnId = null;
+    this.preSessionUpdates = [];
   }
 
   async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
@@ -2659,6 +2677,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       "provider.acp.raw_event",
     );
     if (params.sessionId !== this.sessionId) {
+      if (
+        this.sessionId === null &&
+        !this.closed &&
+        this.preSessionUpdates.length < MAX_PRE_SESSION_UPDATES
+      ) {
+        this.preSessionUpdates.push(params);
+      }
       return;
     }
 

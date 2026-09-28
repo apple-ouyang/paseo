@@ -151,6 +151,7 @@ interface ACPSessionInternals {
   transportRetryDelaysMs: number[];
   translateSessionUpdate(update: SessionUpdate): AgentStreamEvent[];
   acpMcpServers(): unknown[];
+  flushPreSessionUpdates(): Promise<void>;
 }
 
 interface ACPModelSelectionInternals {
@@ -2596,6 +2597,65 @@ describe("ACPAgentSession slash commands", () => {
         description: "Compact the conversation",
         argumentHint: "",
         kind: "command",
+      },
+    ]);
+  });
+
+  test("buffers session/update notifications that arrive before session/new resolves", async () => {
+    // Devin CLI pushes config/mode/commands updates before the session/new
+    // response, while sessionId is still null. Without buffering they hit the
+    // mismatched-session drop and the slash-command palette stays empty.
+    const session = new ACPAgentSession(
+      {
+        provider: "devin",
+        cwd: "/tmp/paseo-acp-test",
+      },
+      {
+        provider: "devin",
+        logger: createTestLogger(),
+        defaultCommand: ["devin", "acp"],
+        defaultModes: [],
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: true,
+          supportsMcpServers: true,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+        },
+        waitForInitialCommands: true,
+        initialCommandsWaitTimeoutMs: 50,
+      },
+    );
+
+    await session.sessionUpdate({
+      sessionId: "devin-session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [{ name: "compact", description: "Compact the conversation" }],
+      },
+    });
+    // A foreign session's update arriving in the same window must stay dropped.
+    await session.sessionUpdate({
+      sessionId: "other-session",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [{ name: "foreign", description: "nope" }],
+      },
+    });
+
+    expect(await session.listCommands()).toEqual([]);
+
+    const internals = asInternals<ACPSessionInternals>(session);
+    internals.sessionId = "devin-session-1";
+    await internals.flushPreSessionUpdates();
+
+    expect(await session.listCommands()).toEqual([
+      {
+        name: "compact",
+        description: "Compact the conversation",
+        argumentHint: "",
+        kind: "skill",
       },
     ]);
   });
