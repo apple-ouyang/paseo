@@ -151,6 +151,7 @@ interface ACPSessionInternals {
   transportRetryDelaysMs: number[];
   translateSessionUpdate(update: SessionUpdate): AgentStreamEvent[];
   acpMcpServers(): unknown[];
+  flushPreSessionUpdates(): Promise<void>;
 }
 
 interface ACPModelSelectionInternals {
@@ -847,6 +848,150 @@ describe("ACP context-window usage", () => {
         usage: { contextWindowMaxTokens: 1_000_000, contextWindowUsedTokens: 13_759 },
         turnId: expect.any(String),
       },
+    ]);
+  });
+});
+
+describe("ACP tool-call detail mapping", () => {
+  async function collectToolEvents(provider: string, updates: SessionUpdate[]) {
+    const session = createSessionWithConfig({ provider });
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    const items: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "tool_call") items.push(event.item);
+    });
+    for (const update of updates) {
+      await session.sessionUpdate({ sessionId: "session-1", update });
+    }
+    return items;
+  }
+
+  test("renders dsh execute calls as shell with command and output", async () => {
+    const items = await collectToolEvents("dsh", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "bash",
+        kind: "execute",
+        status: "in_progress",
+        rawInput: { command: "pnpm test", description: "Run tests" },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "all tests pass" } }],
+      },
+    ]);
+
+    expect(items).toHaveLength(2);
+    expect(items.at(-1)).toMatchObject({
+      type: "tool_call",
+      status: "completed",
+      detail: { type: "shell", command: "pnpm test", output: "all tests pass" },
+    });
+  });
+
+  test("renders dsh edit calls as edit details with diff hunks", async () => {
+    const items = await collectToolEvents("dsh", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "edit",
+        kind: "edit",
+        status: "in_progress",
+        rawInput: { file_path: "/tmp/a.md", old_string: "old", new_string: "new" },
+        locations: [{ path: "/tmp/a.md" }],
+        content: [{ type: "diff", path: "/tmp/a.md", oldText: "old", newText: "new" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+        content: [{ type: "diff", path: "/tmp/a.md", oldText: "old", newText: "new" }],
+      },
+    ]);
+
+    expect(items.at(-1)).toMatchObject({
+      type: "tool_call",
+      status: "completed",
+      detail: {
+        type: "edit",
+        filePath: "/tmp/a.md",
+        oldString: "old",
+        newString: "new",
+      },
+    });
+  });
+
+  test("keeps a call-time diff when the result update has no content", async () => {
+    const items = await collectToolEvents("dsh", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "write",
+        kind: "edit",
+        status: "in_progress",
+        rawInput: { file_path: "/tmp/b.md", content: "body" },
+        locations: [{ path: "/tmp/b.md" }],
+        content: [{ type: "diff", path: "/tmp/b.md", oldText: null, newText: "body" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+      },
+    ]);
+
+    expect(items.at(-1)).toMatchObject({
+      type: "tool_call",
+      detail: {
+        type: "edit",
+        filePath: "/tmp/b.md",
+        newString: "body",
+      },
+    });
+  });
+
+  test("renders dsh read and search calls with file context", async () => {
+    const items = await collectToolEvents("dsh", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-read",
+        title: "read",
+        kind: "read",
+        status: "in_progress",
+        rawInput: { file_path: "/tmp/c.md", offset: 5 },
+        locations: [{ path: "/tmp/c.md" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-read",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "5: line" } }],
+      },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-grep",
+        title: "grep",
+        kind: "search",
+        status: "in_progress",
+        rawInput: { pattern: "needle", path: "/tmp" },
+        locations: [{ path: "/tmp" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-grep",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "Found 1 match" } }],
+      },
+    ]);
+
+    expect(items).toMatchObject([
+      {},
+      { detail: { type: "read", filePath: "/tmp/c.md", offset: 5, content: "5: line" } },
+      {},
+      { detail: { type: "search", query: "needle", content: "Found 1 match" } },
     ]);
   });
 });
@@ -2599,6 +2744,65 @@ describe("ACPAgentSession slash commands", () => {
       },
     ]);
   });
+
+  test("buffers session/update notifications that arrive before session/new resolves", async () => {
+    // Devin CLI pushes config/mode/commands updates before the session/new
+    // response, while sessionId is still null. Without buffering they hit the
+    // mismatched-session drop and the slash-command palette stays empty.
+    const session = new ACPAgentSession(
+      {
+        provider: "devin",
+        cwd: "/tmp/paseo-acp-test",
+      },
+      {
+        provider: "devin",
+        logger: createTestLogger(),
+        defaultCommand: ["devin", "acp"],
+        defaultModes: [],
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: true,
+          supportsMcpServers: true,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+        },
+        waitForInitialCommands: true,
+        initialCommandsWaitTimeoutMs: 50,
+      },
+    );
+
+    await session.sessionUpdate({
+      sessionId: "devin-session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [{ name: "compact", description: "Compact the conversation" }],
+      },
+    });
+    // A foreign session's update arriving in the same window must stay dropped.
+    await session.sessionUpdate({
+      sessionId: "other-session",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [{ name: "foreign", description: "nope" }],
+      },
+    });
+
+    expect(await session.listCommands()).toEqual([]);
+
+    const internals = asInternals<ACPSessionInternals>(session);
+    internals.sessionId = "devin-session-1";
+    await internals.flushPreSessionUpdates();
+
+    expect(await session.listCommands()).toEqual([
+      {
+        name: "compact",
+        description: "Compact the conversation",
+        argumentHint: "",
+        kind: "skill",
+      },
+    ]);
+  });
 });
 
 describe("ACPAgentSession", () => {
@@ -4264,6 +4468,165 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
         },
       },
     ]);
+  });
+
+  test("caps reasoning history during loadSession replay", async () => {
+    let session!: ACPAgentSession;
+    const loadSession = async () => {
+      for (const text of ["r".repeat(20_000), "s".repeat(20_000)]) {
+        await session.sessionUpdate({
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text },
+          } as SessionUpdate,
+        });
+      }
+      return {
+        sessionId: "session-1",
+        modes: null,
+        models: null,
+        configOptions: [],
+      };
+    };
+    ({ session } = makeTestSession({
+      capabilities: { loadSession: true },
+      handle: { sessionId: "session-1", provider: "claude-acp" },
+      loadSession,
+    }));
+
+    await session.initializeResumedSession();
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+    const reasoning = history.filter(
+      (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
+        event.type === "timeline" && event.item.type === "reasoning",
+    );
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning[0].item.text).toHaveLength(20_000);
+    expect(reasoning[1].item.text).toHaveLength(12_000);
+    expect(reasoning[1].item.text).toBe("s".repeat(12_000));
+  });
+
+  test("does not split a surrogate pair at the replay cap", async () => {
+    let session!: ACPAgentSession;
+    const loadSession = async () => {
+      for (const text of ["r".repeat(31_999) + "\ud83d", "\ude00"]) {
+        await session.sessionUpdate({
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text },
+          } as SessionUpdate,
+        });
+      }
+      return {
+        sessionId: "session-1",
+        modes: null,
+        models: null,
+        configOptions: [],
+      };
+    };
+    ({ session } = makeTestSession({
+      capabilities: { loadSession: true },
+      handle: { sessionId: "session-1", provider: "claude-acp" },
+      loadSession,
+    }));
+
+    await session.initializeResumedSession();
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+    const reasoning = history.filter(
+      (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
+        event.type === "timeline" && event.item.type === "reasoning",
+    );
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0].item.text).toHaveLength(31_999);
+    expect(reasoning[0].item.text).toBe("r".repeat(31_999));
+  });
+
+  test("preserves a surrogate pair split across replay chunks", async () => {
+    let session!: ACPAgentSession;
+    const loadSession = async () => {
+      for (const text of ["a\ud83d", "\ude00"]) {
+        await session.sessionUpdate({
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text },
+          } as SessionUpdate,
+        });
+      }
+      return {
+        sessionId: "session-1",
+        modes: null,
+        models: null,
+        configOptions: [],
+      };
+    };
+    ({ session } = makeTestSession({
+      capabilities: { loadSession: true },
+      handle: { sessionId: "session-1", provider: "claude-acp" },
+      loadSession,
+    }));
+
+    await session.initializeResumedSession();
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+    const reasoning = history.filter(
+      (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
+        event.type === "timeline" && event.item.type === "reasoning",
+    );
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning.map((event) => event.item.text).join("")).toBe("a😀");
+  });
+
+  test("consumes the replay budget when a boundary chunk becomes empty", async () => {
+    let session!: ACPAgentSession;
+    const loadSession = async () => {
+      for (const text of ["r".repeat(31_999), "\ud83d", "\ude00"]) {
+        await session.sessionUpdate({
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text },
+          } as SessionUpdate,
+        });
+      }
+      return {
+        sessionId: "session-1",
+        modes: null,
+        models: null,
+        configOptions: [],
+      };
+    };
+    ({ session } = makeTestSession({
+      capabilities: { loadSession: true },
+      handle: { sessionId: "session-1", provider: "claude-acp" },
+      loadSession,
+    }));
+
+    await session.initializeResumedSession();
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+    const reasoning = history.filter(
+      (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
+        event.type === "timeline" && event.item.type === "reasoning",
+    );
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0].item.text).toBe("r".repeat(31_999));
   });
 
   test("coalesces an ID-less text and image user message during loadSession replay", async () => {
