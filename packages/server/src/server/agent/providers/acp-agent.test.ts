@@ -815,6 +815,201 @@ describe("ACPAgentSession terminal tools", () => {
   });
 });
 
+describe("ACP tool-call detail mapping", () => {
+  async function collectToolEvents(provider: string, updates: SessionUpdate[]) {
+    const session = createSessionWithConfig({ provider });
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    const items: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "tool_call") items.push(event.item);
+    });
+    for (const update of updates) {
+      await session.sessionUpdate({ sessionId: "session-1", update });
+    }
+    return items;
+  }
+
+  test("renders dsh execute calls as shell with command and output", async () => {
+    const items = await collectToolEvents("dsh", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "bash",
+        kind: "execute",
+        status: "in_progress",
+        rawInput: { command: "pnpm test", description: "Run tests" },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "all tests pass" } }],
+      },
+    ]);
+
+    expect(items).toHaveLength(2);
+    expect(items.at(-1)).toMatchObject({
+      type: "tool_call",
+      status: "completed",
+      detail: { type: "shell", command: "pnpm test", output: "all tests pass" },
+    });
+  });
+
+  test("renders dsh edit calls as edit details with diff hunks", async () => {
+    const items = await collectToolEvents("dsh", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "edit",
+        kind: "edit",
+        status: "in_progress",
+        rawInput: { file_path: "/tmp/a.md", old_string: "old", new_string: "new" },
+        locations: [{ path: "/tmp/a.md" }],
+        content: [{ type: "diff", path: "/tmp/a.md", oldText: "old", newText: "new" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+        content: [{ type: "diff", path: "/tmp/a.md", oldText: "old", newText: "new" }],
+      },
+    ]);
+
+    expect(items.at(-1)).toMatchObject({
+      type: "tool_call",
+      status: "completed",
+      detail: {
+        type: "edit",
+        filePath: "/tmp/a.md",
+        oldString: "old",
+        newString: "new",
+      },
+    });
+  });
+
+  test("keeps a call-time diff when the result update has no content", async () => {
+    const items = await collectToolEvents("dsh", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "write",
+        kind: "edit",
+        status: "in_progress",
+        rawInput: { file_path: "/tmp/b.md", content: "body" },
+        locations: [{ path: "/tmp/b.md" }],
+        content: [{ type: "diff", path: "/tmp/b.md", oldText: null, newText: "body" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+      },
+    ]);
+
+    expect(items.at(-1)).toMatchObject({
+      type: "tool_call",
+      detail: {
+        type: "edit",
+        filePath: "/tmp/b.md",
+        newString: "body",
+      },
+    });
+  });
+
+  test("links devin _meta.terminal_exit to terminal output and exit code", async () => {
+    const child = createTerminalChildStub();
+    vi.spyOn(spawnUtils, "spawnProcess").mockReturnValue(child);
+    const session = createSessionWithConfig({ provider: "devin" });
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    const items: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "tool_call") items.push(event.item);
+    });
+
+    const { terminalId } = await session.createTerminal({
+      sessionId: "session-1",
+      command: "echo devin-out",
+    });
+    child.stdout!.emit("data", "devin-out\n");
+    child.emit("exit", 0, null);
+    await session.waitForTerminalExit({ sessionId: "session-1", terminalId });
+
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "Ran echo",
+        kind: "execute",
+        status: "in_progress",
+        rawInput: { command: "echo devin-out" },
+      } as SessionUpdate,
+    });
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+        _meta: { terminal_exit: { terminal_id: terminalId, exit_code: 0, signal: null } },
+      } as SessionUpdate,
+    });
+
+    expect(items.at(-1)).toMatchObject({
+      type: "tool_call",
+      status: "completed",
+      detail: {
+        type: "shell",
+        command: "echo devin-out",
+        output: "devin-out\n",
+        exitCode: 0,
+      },
+    });
+  });
+
+  test("renders dsh read and search calls with file context", async () => {
+    const items = await collectToolEvents("dsh", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-read",
+        title: "read",
+        kind: "read",
+        status: "in_progress",
+        rawInput: { file_path: "/tmp/c.md", offset: 5 },
+        locations: [{ path: "/tmp/c.md" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-read",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "5: line" } }],
+      },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-grep",
+        title: "grep",
+        kind: "search",
+        status: "in_progress",
+        rawInput: { pattern: "needle", path: "/tmp" },
+        locations: [{ path: "/tmp" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-grep",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "Found 1 match" } }],
+      },
+    ]);
+
+    expect(items).toMatchObject([
+      {},
+      { detail: { type: "read", filePath: "/tmp/c.md", offset: 5, content: "5: line" } },
+      {},
+      { detail: { type: "search", query: "needle", content: "Found 1 match" } },
+    ]);
+  });
+});
+
 describe("mapACPUsage", () => {
   test("maps ACP usage fields into Paseo usage", () => {
     expect(
