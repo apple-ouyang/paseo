@@ -3669,17 +3669,37 @@ function coalesceDefined<T>(next: T | undefined, previous: T | undefined, fallba
   return fallback;
 }
 
+/**
+ * Read a provider's terminal-exit linkage, e.g. Devin CLI's
+ * `_meta.terminal_exit.terminal_id`, into a standard terminal content block.
+ * Agents that stream output through client terminals but never emit a
+ * `type: "terminal"` content item would otherwise lose their output entirely.
+ */
+function extractTerminalExitContent(
+  update: ToolCall | ToolCallUpdate,
+): ToolCallContent | undefined {
+  const meta = readRecord(update._meta);
+  const exit = readRecord(meta?.terminal_exit);
+  const terminalId = readString(exit, ["terminal_id"]);
+  return terminalId ? { type: "terminal", terminalId } : undefined;
+}
+
 function mergeToolSnapshot(
   toolCallId: string,
   update: ToolCall | ToolCallUpdate,
   previous?: ACPToolSnapshot,
 ): ACPToolSnapshot {
+  const content = coalesceDefined(update.content, previous?.content, null);
+  const terminalContent = extractTerminalExitContent(update);
   return {
     toolCallId,
     title: update.title ?? previous?.title ?? toolCallId,
     kind: update.kind ?? previous?.kind ?? null,
     status: update.status ?? previous?.status ?? null,
-    content: coalesceDefined(update.content, previous?.content, null),
+    content:
+      terminalContent !== undefined && !content?.some((item) => item.type === "terminal")
+        ? [...(content ?? []), terminalContent]
+        : content,
     locations: coalesceDefined(update.locations, previous?.locations, null),
     rawInput: update.rawInput !== undefined ? update.rawInput : previous?.rawInput,
     rawOutput: update.rawOutput !== undefined ? update.rawOutput : previous?.rawOutput,
