@@ -122,14 +122,35 @@ describe("isACPTransportRetryableErrorMessage", () => {
   });
 });
 
-async function expectTurnCompleted(events: AgentStreamEvent[], turnId: string): Promise<void> {
-  await vi.waitFor(() => {
-    expect(events.some(isCompletedTurn(turnId))).toBe(true);
+function createTurnCompletionWaiter(session: ACPAgentSession): {
+  promise: Promise<void>;
+  setTurnId: (turnId: string) => void;
+} {
+  let expectedTurnId: string | null = null;
+  let completedTurnId: string | null = null;
+  let settled = false;
+  let resolvePromise!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
   });
-}
-
-function isCompletedTurn(turnId: string): (event: AgentStreamEvent) => boolean {
-  return (event) => event.type === "turn_completed" && event.turnId === turnId;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    unsubscribe();
+    resolvePromise();
+  };
+  const unsubscribe = session.subscribe((event) => {
+    if (event.type !== "turn_completed") return;
+    completedTurnId = event.turnId;
+    if (expectedTurnId === event.turnId) settle();
+  });
+  return {
+    promise,
+    setTurnId: (turnId) => {
+      expectedTurnId = turnId;
+      if (completedTurnId === turnId) settle();
+    },
+  };
 }
 
 interface ACPSessionInternals {
@@ -3216,11 +3237,11 @@ describe("ACPAgentSession", () => {
     asInternals<ACPSessionInternals>(session).transportRetryDelaysMs = [0];
     session.subscribe((event) => events.push(event));
 
+    const completion = createTurnCompletionWaiter(session);
     const { turnId } = await session.startTurn("hello");
-    await vi.waitFor(() => {
-      expect(prompt).toHaveBeenCalledTimes(2);
-    });
-    await expectTurnCompleted(events, turnId);
+    completion.setTurnId(turnId);
+    await completion.promise;
+    expect(prompt).toHaveBeenCalledTimes(2);
 
     expect(events.filter((event) => event.type === "turn_failed")).toEqual([]);
     expect(
@@ -3275,11 +3296,11 @@ describe("ACPAgentSession", () => {
     asInternals<ACPSessionInternals>(session).transportRetryDelaysMs = [0];
     session.subscribe((event) => events.push(event));
 
+    const completion = createTurnCompletionWaiter(session);
     const { turnId } = await session.startTurn("hello");
-    await vi.waitFor(() => {
-      expect(prompt).toHaveBeenCalledTimes(2);
-    });
-    await expectTurnCompleted(events, turnId);
+    completion.setTurnId(turnId);
+    await completion.promise;
+    expect(prompt).toHaveBeenCalledTimes(2);
     expect(events.filter((event) => event.type === "turn_failed")).toEqual([]);
   });
 
@@ -3305,8 +3326,10 @@ describe("ACPAgentSession", () => {
     asInternals<ACPSessionInternals>(session).transportRetryDelaysMs = [0, 0];
     session.subscribe((event) => events.push(event));
 
+    const completion = createTurnCompletionWaiter(session);
     const { turnId } = await session.startTurn("hello");
-    await expectTurnCompleted(events, turnId);
+    completion.setTurnId(turnId);
+    await completion.promise;
     expect(prompt).toHaveBeenCalledTimes(1);
     expect(
       events.filter((event) => event.type === "timeline" && event.item.type === "error"),
