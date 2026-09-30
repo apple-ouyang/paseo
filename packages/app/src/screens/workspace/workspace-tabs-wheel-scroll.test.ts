@@ -108,7 +108,6 @@ describe("resolveWorkspaceTabsScrollElement", () => {
     expect(resolveWorkspaceTabsScrollElement(null)).toBeNull();
     expect(resolveWorkspaceTabsScrollElement(undefined)).toBeNull();
     expect(resolveWorkspaceTabsScrollElement({ getScrollableNode: () => null })).toBeNull();
-    // A ref shape without `addEventListener` cannot hold the wheel listener.
     expect(resolveWorkspaceTabsScrollElement({ scrollLeft: 0 })).toBeNull();
     expect(
       resolveWorkspaceTabsScrollElement({ getScrollableNode: () => ({ scrollLeft: 0 }) }),
