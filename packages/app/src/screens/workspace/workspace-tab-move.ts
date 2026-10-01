@@ -25,6 +25,15 @@ export const MOVE_TO_WORKSPACE_MENU_KEY = "move-to-workspace";
  * patched clients converge on the same tab placement across devices. Use the
  * `paseo.` prefix like Paseo's own operational labels
  * (`paseo.open-agent-tab.*`, `paseo.parent-agent-id`).
+ *
+ * Sync discipline (the injected bundle wiring enforces this; see
+ * server_setup/paseo-patches/patch-paseo-tab-move-workspace.py): user gestures
+ * (open/close/move) write labels at action time; the periodic broadcast only
+ * adopts tabs that carry no placement label and only writes order drift on
+ * converged ones — it must never write a workspace/closed value that disagrees
+ * with the label, or a not-yet-converged client would stomp another client's
+ * in-flight move. Locally written labels are merged over the stored copy until
+ * the daemon echo lands, so a gesture never snaps back for one tick.
  */
 export const TAB_WORKSPACE_LABEL = "paseo.tab-workspace";
 
