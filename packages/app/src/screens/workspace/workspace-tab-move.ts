@@ -28,17 +28,58 @@ export const MOVE_TO_WORKSPACE_MENU_KEY = "move-to-workspace";
  */
 export const TAB_WORKSPACE_LABEL = "paseo.tab-workspace";
 
+/** Zero-padded position of the agent tab inside its pane row. */
+export const TAB_ORDER_LABEL = "paseo.tab-order";
+
+export function formatTabOrderLabel(index: number): string {
+  return String(Math.max(0, Math.floor(index))).padStart(6, "0");
+}
+
+export function parseTabOrderLabel(value: string | null | undefined): number | null {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    return null;
+  }
+  return Number(value);
+}
+
 /** Drop target: sidebar workspace rows carry `testID={prefix}{workspaceKey}`. */
 export const SIDEBAR_WORKSPACE_ROW_TESTID_PREFIX = "sidebar-workspace-row-";
 
 export function buildTabWorkspaceLabels(
   currentLabels: Readonly<Record<string, string>> | null | undefined,
   workspaceId: string,
+  tabOrder?: number | null,
 ): Record<string, string> {
   return {
     ...currentLabels,
     [TAB_WORKSPACE_LABEL]: workspaceId.trim(),
+    ...(tabOrder == null ? {} : { [TAB_ORDER_LABEL]: formatTabOrderLabel(tabOrder) }),
   };
+}
+
+/**
+ * Stable order for one pane's agent tabs: sort by the synced order label,
+ * unlabeled tabs stay last in their current relative order. Non-agent tabs are
+ * not in this list; the caller keeps their slots untouched.
+ */
+export function planTabOrderEnforcement(input: {
+  agentTabIdsInSlots: readonly string[];
+  orderLabelByTabId: Readonly<Record<string, string | null | undefined>>;
+}): string[] {
+  return [...input.agentTabIdsInSlots].sort((left, right) => {
+    const a = parseTabOrderLabel(input.orderLabelByTabId[left]);
+    const b = parseTabOrderLabel(input.orderLabelByTabId[right]);
+    if (a == null && b == null) {
+      return 0;
+    }
+    if (a == null) {
+      return 1;
+    }
+    if (b == null) {
+      return -1;
+    }
+    return a - b;
+  });
 }
 
 /**
