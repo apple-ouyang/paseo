@@ -3,16 +3,20 @@ import type { WorkspaceTab } from "@/workspace-tabs/model";
 import {
   buildMoveToWorkspaceMenuEntry,
   buildTabWorkspaceLabels,
+  formatTabOrderLabel,
   groupWorkspaceTabMoveTargets,
   insertMoveToWorkspaceMenuEntry,
   listWorkspaceTabMoveTargets,
   moveWorkspaceTab,
+  parseTabOrderLabel,
+  planTabOrderEnforcement,
   planTabWorkspaceEnforcement,
   resolveSidebarDropWorkspaceKey,
   resolveWorkspaceTabMoveRowLabel,
   resolveWorkspaceTabMoveSource,
   resolveWorkspaceTabMoveStrings,
   MOVE_TO_WORKSPACE_MENU_KEY,
+  TAB_ORDER_LABEL,
   TAB_WORKSPACE_LABEL,
   type WorkspaceTabMoveStore,
   type WorkspaceTabMoveWorkspace,
@@ -242,6 +246,55 @@ describe("listWorkspaceTabMoveTargets", () => {
   });
 });
 
+describe("tab order labels", () => {
+  it("formats and parses order labels", () => {
+    expect(formatTabOrderLabel(3)).toBe("000003");
+    expect(parseTabOrderLabel("000003")).toBe(3);
+    expect(parseTabOrderLabel("12")).toBe(12);
+    expect(parseTabOrderLabel("nope")).toBeNull();
+    expect(parseTabOrderLabel(null)).toBeNull();
+  });
+
+  it("records the order alongside the workspace label", () => {
+    expect(buildTabWorkspaceLabels(null, "ws-b", 2)).toEqual({
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_ORDER_LABEL]: "000002",
+    });
+  });
+});
+
+describe("planTabOrderEnforcement", () => {
+  it("sorts agent tabs by their order label, keeping unlabeled tabs last", () => {
+    expect(
+      planTabOrderEnforcement({
+        agentTabIdsInSlots: ["c", "a", "b"],
+        orderLabelByTabId: { a: "000000", b: "000001", c: "000002" },
+      }),
+    ).toEqual(["a", "b", "c"]);
+    expect(
+      planTabOrderEnforcement({
+        agentTabIdsInSlots: ["x", "a", "y"],
+        orderLabelByTabId: { a: "000000" },
+      }),
+    ).toEqual(["a", "x", "y"]);
+  });
+
+  it("keeps the current order when labels are missing or equal", () => {
+    expect(
+      planTabOrderEnforcement({
+        agentTabIdsInSlots: ["a", "b"],
+        orderLabelByTabId: {},
+      }),
+    ).toEqual(["a", "b"]);
+    expect(
+      planTabOrderEnforcement({
+        agentTabIdsInSlots: ["a", "b"],
+        orderLabelByTabId: { a: "000000", b: "000001" },
+      }),
+    ).toEqual(["a", "b"]);
+  });
+});
+
 describe("buildTabWorkspaceLabels", () => {
   it("sets the tab-workspace label and keeps existing labels", () => {
     const labels = buildTabWorkspaceLabels({ "paseo.open-agent-tab.abc": "true" }, "ws-b");
@@ -249,6 +302,7 @@ describe("buildTabWorkspaceLabels", () => {
       "paseo.open-agent-tab.abc": "true",
       [TAB_WORKSPACE_LABEL]: "ws-b",
     });
+    expect(labels[TAB_ORDER_LABEL]).toBeUndefined();
   });
 
   it("works without existing labels", () => {
