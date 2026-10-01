@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceTab } from "@/workspace-tabs/model";
 import {
   buildMoveToWorkspaceMenuEntry,
-  buildWorkspaceDisplayName,
+  groupWorkspaceTabMoveTargets,
   insertMoveToWorkspaceMenuEntry,
   listWorkspaceTabMoveTargets,
   moveWorkspaceTab,
+  resolveWorkspaceTabMoveRowLabel,
   resolveWorkspaceTabMoveSource,
+  resolveWorkspaceTabMoveStrings,
   MOVE_TO_WORKSPACE_MENU_KEY,
   type WorkspaceTabMoveStore,
   type WorkspaceTabMoveWorkspace,
@@ -35,33 +37,98 @@ function workspace(
   return {
     workspaceKey: `srv:${workspaceId}`,
     workspaceId,
+    projectName: "Project A",
     name: workspaceId,
+    currentBranch: null,
+    workspaceDirectoryLabel: `~/work/${workspaceId}`,
     archiving: false,
     ...overrides,
   };
 }
 
+describe("resolveWorkspaceTabMoveStrings", () => {
+  it("returns Chinese strings for zh locales", () => {
+    const strings = resolveWorkspaceTabMoveStrings("zh-CN");
+    expect(strings.menuLabel).toContain("挪");
+    expect(strings.title).toContain("Workspace");
+    expect(strings.empty.length).toBeGreaterThan(0);
+  });
+
+  it("returns English strings for English and unknown locales", () => {
+    expect(resolveWorkspaceTabMoveStrings("en").menuLabel).toBe("Move to workspace…");
+    expect(resolveWorkspaceTabMoveStrings(null).menuLabel).toBe("Move to workspace…");
+    expect(resolveWorkspaceTabMoveStrings("fr-FR").menuLabel).toBe("Move to workspace…");
+  });
+});
+
+describe("resolveWorkspaceTabMoveRowLabel", () => {
+  it("uses the workspace name in title mode", () => {
+    expect(
+      resolveWorkspaceTabMoveRowLabel({
+        workspace: { name: "my-workspace", currentBranch: "main" },
+        titleSource: "title",
+      }),
+    ).toBe("my-workspace");
+  });
+
+  it("uses the branch in branch mode, falling back to the name", () => {
+    expect(
+      resolveWorkspaceTabMoveRowLabel({
+        workspace: { name: "my-workspace", currentBranch: "main" },
+        titleSource: "branch",
+      }),
+    ).toBe("main");
+    expect(
+      resolveWorkspaceTabMoveRowLabel({
+        workspace: { name: "my-workspace", currentBranch: null },
+        titleSource: "branch",
+      }),
+    ).toBe("my-workspace");
+  });
+});
+
+describe("groupWorkspaceTabMoveTargets", () => {
+  it("groups by project name, preserving sidebar order", () => {
+    const groups = groupWorkspaceTabMoveTargets([
+      workspace("ws-a", { projectName: "P1" }),
+      workspace("ws-b", { projectName: "P2" }),
+      workspace("ws-c", { projectName: "P1" }),
+    ]);
+    expect(groups.map((group) => group.projectName)).toEqual(["P1", "P2"]);
+    expect(groups[0].workspaces.map((item) => item.workspaceId)).toEqual(["ws-a", "ws-c"]);
+    expect(groups[1].workspaces.map((item) => item.workspaceId)).toEqual(["ws-b"]);
+  });
+});
+
 describe("buildMoveToWorkspaceMenuEntry", () => {
   it("returns null for non-agent tabs", () => {
     expect(
-      buildMoveToWorkspaceMenuEntry({ tab: terminalTab("t1"), onSelect: () => {} }),
+      buildMoveToWorkspaceMenuEntry({
+        tab: terminalTab("t1"),
+        onSelect: () => {},
+        strings: resolveWorkspaceTabMoveStrings("en"),
+      }),
     ).toBeNull();
   });
 
   it("returns a stable entry for agent tabs and forwards the tab on select", () => {
     const tab = agentTab("agent-1");
     const onSelect = vi.fn();
-    const entry = buildMoveToWorkspaceMenuEntry({ tab, onSelect });
+    const strings = resolveWorkspaceTabMoveStrings("zh-CN");
+    const entry = buildMoveToWorkspaceMenuEntry({ tab, onSelect, strings });
     expect(entry).not.toBeNull();
     expect(entry?.kind).toBe("item");
     expect(entry?.key).toBe(MOVE_TO_WORKSPACE_MENU_KEY);
     if (entry?.kind !== "item") throw new Error("expected item entry");
+    expect(entry.label).toBe(strings.menuLabel);
     entry.onSelect();
     expect(onSelect).toHaveBeenCalledWith(tab);
   });
 });
 
 describe("insertMoveToWorkspaceMenuEntry", () => {
+  const strings = resolveWorkspaceTabMoveStrings("en");
+
   it("inserts the move entry before the close group and keeps other entries", () => {
     const entries = [
       { kind: "item", key: "rename", label: "Rename", testID: "rename", onSelect: () => {} },
@@ -79,6 +146,7 @@ describe("insertMoveToWorkspaceMenuEntry", () => {
       entries: [...entries],
       tab: agentTab("agent-1"),
       onSelect: () => {},
+      strings,
     });
     const keys = result.map((entry) => entry.key);
     expect(keys).toEqual([
@@ -98,6 +166,7 @@ describe("insertMoveToWorkspaceMenuEntry", () => {
       entries: [...entries],
       tab: agentTab("agent-1"),
       onSelect: () => {},
+      strings,
     });
     expect(result.map((entry) => entry.key)).toEqual(["rename", MOVE_TO_WORKSPACE_MENU_KEY]);
   });
@@ -107,11 +176,13 @@ describe("insertMoveToWorkspaceMenuEntry", () => {
       entries: [],
       tab: agentTab("agent-1"),
       onSelect: () => {},
+      strings,
     });
     const second = insertMoveToWorkspaceMenuEntry({
       entries: first,
       tab: agentTab("agent-1"),
       onSelect: () => {},
+      strings,
     });
     expect(second.map((entry) => entry.key)).toEqual([MOVE_TO_WORKSPACE_MENU_KEY]);
   });
@@ -124,6 +195,7 @@ describe("insertMoveToWorkspaceMenuEntry", () => {
       entries: [...entries],
       tab: terminalTab("t1"),
       onSelect: () => {},
+      strings,
     });
     expect(result.map((entry) => entry.key)).toEqual(["close"]);
   });
@@ -163,21 +235,6 @@ describe("listWorkspaceTabMoveTargets", () => {
       ],
     });
     expect(targets.map((target) => target.workspaceId)).toEqual(["ws-b", "ws-c"]);
-  });
-});
-
-describe("buildWorkspaceDisplayName", () => {
-  it("prefers title, then name, then the directory basename", () => {
-    expect(buildWorkspaceDisplayName({ title: "T", name: "n", workspaceDirectory: "/d/x" })).toBe(
-      "T",
-    );
-    expect(buildWorkspaceDisplayName({ title: null, name: "n", workspaceDirectory: "/d/x" })).toBe(
-      "n",
-    );
-    expect(buildWorkspaceDisplayName({ title: null, name: "", workspaceDirectory: "/d/x" })).toBe(
-      "x",
-    );
-    expect(buildWorkspaceDisplayName({ title: null, name: "", workspaceDirectory: "" })).toBe("");
   });
 });
 
