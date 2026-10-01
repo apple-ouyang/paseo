@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceTab } from "@/workspace-tabs/model";
 import {
   buildMoveToWorkspaceMenuEntry,
+  buildTabClosedLabels,
   buildTabWorkspaceLabels,
   formatTabOrderLabel,
   groupWorkspaceTabMoveTargets,
@@ -16,6 +17,7 @@ import {
   resolveWorkspaceTabMoveSource,
   resolveWorkspaceTabMoveStrings,
   MOVE_TO_WORKSPACE_MENU_KEY,
+  TAB_CLOSED_LABEL,
   TAB_ORDER_LABEL,
   TAB_WORKSPACE_LABEL,
   type WorkspaceTabMoveStore,
@@ -258,6 +260,7 @@ describe("tab order labels", () => {
   it("records the order alongside the workspace label", () => {
     expect(buildTabWorkspaceLabels(null, "ws-b", 2)).toEqual({
       [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_CLOSED_LABEL]: "",
       [TAB_ORDER_LABEL]: "000002",
     });
   });
@@ -296,17 +299,36 @@ describe("planTabOrderEnforcement", () => {
 });
 
 describe("buildTabWorkspaceLabels", () => {
-  it("sets the tab-workspace label and keeps existing labels", () => {
-    const labels = buildTabWorkspaceLabels({ "paseo.open-agent-tab.abc": "true" }, "ws-b");
+  it("sets the tab-workspace label, clears the closed tombstone, and keeps existing labels", () => {
+    const labels = buildTabWorkspaceLabels(
+      { "paseo.open-agent-tab.abc": "true", [TAB_CLOSED_LABEL]: "1" },
+      "ws-b",
+    );
     expect(labels).toEqual({
       "paseo.open-agent-tab.abc": "true",
       [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_CLOSED_LABEL]: "",
     });
     expect(labels[TAB_ORDER_LABEL]).toBeUndefined();
   });
 
   it("works without existing labels", () => {
-    expect(buildTabWorkspaceLabels(null, "ws-b")).toEqual({ [TAB_WORKSPACE_LABEL]: "ws-b" });
+    expect(buildTabWorkspaceLabels(null, "ws-b")).toEqual({
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_CLOSED_LABEL]: "",
+    });
+  });
+});
+
+describe("buildTabClosedLabels", () => {
+  it("marks the tab closed while keeping the workspace label for reopen placement", () => {
+    expect(
+      buildTabClosedLabels({ [TAB_WORKSPACE_LABEL]: "ws-b", [TAB_ORDER_LABEL]: "000002" }),
+    ).toEqual({
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_ORDER_LABEL]: "000002",
+      [TAB_CLOSED_LABEL]: "1",
+    });
   });
 });
 
@@ -334,6 +356,26 @@ describe("planTabWorkspaceEnforcement", () => {
       planTabWorkspaceEnforcement({
         targetWorkspaceKey: null,
         workspaceKeysWithTab: ["srv:ws-a"],
+      }),
+    ).toEqual({ closeIn: [], ensureIn: null });
+  });
+
+  it("closes the tab everywhere when the closed tombstone is set", () => {
+    expect(
+      planTabWorkspaceEnforcement({
+        targetWorkspaceKey: "srv:ws-b",
+        workspaceKeysWithTab: ["srv:ws-a", "srv:ws-b"],
+        closed: true,
+      }),
+    ).toEqual({ closeIn: ["srv:ws-a", "srv:ws-b"], ensureIn: null });
+  });
+
+  it("keeps a tombstoned tab closed even when no client has it open", () => {
+    expect(
+      planTabWorkspaceEnforcement({
+        targetWorkspaceKey: "srv:ws-b",
+        workspaceKeysWithTab: [],
+        closed: true,
       }),
     ).toEqual({ closeIn: [], ensureIn: null });
   });
@@ -402,6 +444,7 @@ describe("moveWorkspaceTab", () => {
     expect(updateAgentLabels).toHaveBeenCalledWith("agent-1", {
       existing: "1",
       [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_CLOSED_LABEL]: "",
     });
   });
 
