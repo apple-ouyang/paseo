@@ -19,6 +19,54 @@ import type { WorkspaceTab, WorkspaceTabTarget } from "@/workspace-tabs/model";
  */
 export const MOVE_TO_WORKSPACE_MENU_KEY = "move-to-workspace";
 
+/**
+ * Daemon-synced label that records which workspace an agent tab was moved to.
+ * Agent labels travel through `update_agent_request` and reach every client, so
+ * patched clients converge on the same tab placement across devices. Use the
+ * `paseo.` prefix like Paseo's own operational labels
+ * (`paseo.open-agent-tab.*`, `paseo.parent-agent-id`).
+ */
+export const TAB_WORKSPACE_LABEL = "paseo.tab-workspace";
+
+/** Drop target: sidebar workspace rows carry `testID={prefix}{workspaceKey}`. */
+export const SIDEBAR_WORKSPACE_ROW_TESTID_PREFIX = "sidebar-workspace-row-";
+
+export function buildTabWorkspaceLabels(
+  currentLabels: Readonly<Record<string, string>> | null | undefined,
+  workspaceId: string,
+): Record<string, string> {
+  return {
+    ...currentLabels,
+    [TAB_WORKSPACE_LABEL]: workspaceId.trim(),
+  };
+}
+
+/**
+ * Enforcement plan for the synced label: close the agent tab everywhere except
+ * the labeled target, and open it in the target when it is missing there.
+ */
+export function planTabWorkspaceEnforcement(input: {
+  targetWorkspaceKey: string | null;
+  workspaceKeysWithTab: readonly string[];
+}): { closeIn: string[]; ensureIn: string | null } {
+  const targetWorkspaceKey = input.targetWorkspaceKey?.trim() || null;
+  if (!targetWorkspaceKey) {
+    return { closeIn: [], ensureIn: null };
+  }
+  return {
+    closeIn: input.workspaceKeysWithTab.filter((key) => key !== targetWorkspaceKey),
+    ensureIn: input.workspaceKeysWithTab.includes(targetWorkspaceKey) ? null : targetWorkspaceKey,
+  };
+}
+
+export function resolveSidebarDropWorkspaceKey(testId: string | null | undefined): string | null {
+  if (!testId || !testId.startsWith(SIDEBAR_WORKSPACE_ROW_TESTID_PREFIX)) {
+    return null;
+  }
+  const workspaceKey = testId.slice(SIDEBAR_WORKSPACE_ROW_TESTID_PREFIX.length).trim();
+  return workspaceKey || null;
+}
+
 export type WorkspaceTabMoveTitleSource = "title" | "branch";
 
 export interface WorkspaceTabMoveStrings {
@@ -75,6 +123,12 @@ export interface WorkspaceTabMoveStore {
   closeTab(workspaceKey: string, tabId: string): void;
   unpinAgent(workspaceKey: string, agentId: string): void;
   hideAgent(workspaceKey: string, agentId: string): void;
+}
+
+export interface WorkspaceTabMoveDeps {
+  store: WorkspaceTabMoveStore;
+  /** Daemon-synced placement write; omit when no client is connected. */
+  updateAgentLabels?: (agentId: string, labels: Record<string, string>) => void;
 }
 
 /** Mirrors `resolveSidebarWorkspacePrimaryLabel`. */
@@ -187,12 +241,15 @@ export function insertMoveToWorkspaceMenuEntry(input: {
 }
 
 export function moveWorkspaceTab(
-  deps: { store: WorkspaceTabMoveStore },
+  deps: WorkspaceTabMoveDeps,
   input: {
     sourceWorkspaceKey: string;
     targetWorkspaceKey: string;
     tabId: string;
     target: WorkspaceTabTarget;
+    /** Descriptor id of the target workspace; enables the synced label write. */
+    targetWorkspaceId?: string;
+    agentLabels?: Readonly<Record<string, string>> | null;
   },
 ): boolean {
   const sourceWorkspaceKey = input.sourceWorkspaceKey.trim();
@@ -220,5 +277,9 @@ export function moveWorkspaceTab(
   deps.store.unpinAgent(sourceWorkspaceKey, agentId);
   deps.store.hideAgent(sourceWorkspaceKey, agentId);
   deps.store.closeTab(sourceWorkspaceKey, tabId);
+  const targetWorkspaceId = input.targetWorkspaceId?.trim();
+  if (deps.updateAgentLabels && targetWorkspaceId) {
+    deps.updateAgentLabels(agentId, buildTabWorkspaceLabels(input.agentLabels, targetWorkspaceId));
+  }
   return true;
 }

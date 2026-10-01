@@ -2,14 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceTab } from "@/workspace-tabs/model";
 import {
   buildMoveToWorkspaceMenuEntry,
+  buildTabWorkspaceLabels,
   groupWorkspaceTabMoveTargets,
   insertMoveToWorkspaceMenuEntry,
   listWorkspaceTabMoveTargets,
   moveWorkspaceTab,
+  planTabWorkspaceEnforcement,
+  resolveSidebarDropWorkspaceKey,
   resolveWorkspaceTabMoveRowLabel,
   resolveWorkspaceTabMoveSource,
   resolveWorkspaceTabMoveStrings,
   MOVE_TO_WORKSPACE_MENU_KEY,
+  TAB_WORKSPACE_LABEL,
   type WorkspaceTabMoveStore,
   type WorkspaceTabMoveWorkspace,
 } from "@/screens/workspace/workspace-tab-move";
@@ -238,6 +242,61 @@ describe("listWorkspaceTabMoveTargets", () => {
   });
 });
 
+describe("buildTabWorkspaceLabels", () => {
+  it("sets the tab-workspace label and keeps existing labels", () => {
+    const labels = buildTabWorkspaceLabels({ "paseo.open-agent-tab.abc": "true" }, "ws-b");
+    expect(labels).toEqual({
+      "paseo.open-agent-tab.abc": "true",
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+    });
+  });
+
+  it("works without existing labels", () => {
+    expect(buildTabWorkspaceLabels(null, "ws-b")).toEqual({ [TAB_WORKSPACE_LABEL]: "ws-b" });
+  });
+});
+
+describe("planTabWorkspaceEnforcement", () => {
+  it("closes stale tabs and ensures the tab exists in the labeled target", () => {
+    expect(
+      planTabWorkspaceEnforcement({
+        targetWorkspaceKey: "srv:ws-b",
+        workspaceKeysWithTab: ["srv:ws-a"],
+      }),
+    ).toEqual({ closeIn: ["srv:ws-a"], ensureIn: "srv:ws-b" });
+  });
+
+  it("only closes stale tabs when the target already has the tab", () => {
+    expect(
+      planTabWorkspaceEnforcement({
+        targetWorkspaceKey: "srv:ws-b",
+        workspaceKeysWithTab: ["srv:ws-a", "srv:ws-b"],
+      }),
+    ).toEqual({ closeIn: ["srv:ws-a"], ensureIn: null });
+  });
+
+  it("does nothing without a target label", () => {
+    expect(
+      planTabWorkspaceEnforcement({
+        targetWorkspaceKey: null,
+        workspaceKeysWithTab: ["srv:ws-a"],
+      }),
+    ).toEqual({ closeIn: [], ensureIn: null });
+  });
+});
+
+describe("resolveSidebarDropWorkspaceKey", () => {
+  it("parses the workspace key from the sidebar row test id", () => {
+    expect(resolveSidebarDropWorkspaceKey("sidebar-workspace-row-srv:ws-b")).toBe("srv:ws-b");
+  });
+
+  it("returns null for unrelated test ids", () => {
+    expect(resolveSidebarDropWorkspaceKey("workspace-tab-abc")).toBeNull();
+    expect(resolveSidebarDropWorkspaceKey(null)).toBeNull();
+    expect(resolveSidebarDropWorkspaceKey("sidebar-workspace-row-")).toBeNull();
+  });
+});
+
 describe("moveWorkspaceTab", () => {
   function makeStore(openResult: string | null = "new-tab") {
     return {
@@ -269,6 +328,27 @@ describe("moveWorkspaceTab", () => {
     expect(store.unpinAgent).toHaveBeenCalledWith("srv:ws-a", "agent-1");
     expect(store.hideAgent).toHaveBeenCalledWith("srv:ws-a", "agent-1");
     expect(store.closeTab).toHaveBeenCalledWith("srv:ws-a", "tab-1");
+  });
+
+  it("writes the synced workspace label when ids are provided", () => {
+    const store = makeStore();
+    const updateAgentLabels = vi.fn();
+    const moved = moveWorkspaceTab(
+      { store, updateAgentLabels },
+      {
+        sourceWorkspaceKey: "srv:ws-a",
+        targetWorkspaceKey: "srv:ws-b",
+        tabId: "tab-1",
+        target: { kind: "agent", agentId: "agent-1" },
+        targetWorkspaceId: "ws-b",
+        agentLabels: { existing: "1" },
+      },
+    );
+    expect(moved).toBe(true);
+    expect(updateAgentLabels).toHaveBeenCalledWith("agent-1", {
+      existing: "1",
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+    });
   });
 
   it("keeps the source tab when the target open fails", () => {
