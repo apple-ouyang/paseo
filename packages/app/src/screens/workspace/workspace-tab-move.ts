@@ -11,15 +11,53 @@ import type { WorkspaceTab, WorkspaceTabTarget } from "@/workspace-tabs/model";
  * source via the same cleanup as closing a tab (`unpin` + `hide` + `close`), so
  * reconciliation does not re-open it there. The agent itself keeps running in
  * its original directory and stays under its original project in the sidebar.
+ *
+ * The picker mirrors the sidebar's project → workspace grouping
+ * (`sidebar-workspaces-view-model`: `projectNameForWorkspace` and
+ * `resolveSidebarWorkspacePrimaryLabel` semantics), so the move list reads the
+ * same way as the left sidebar.
  */
 export const MOVE_TO_WORKSPACE_MENU_KEY = "move-to-workspace";
-export const MOVE_TO_WORKSPACE_LABEL = "Move to workspace…";
+
+export type WorkspaceTabMoveTitleSource = "title" | "branch";
+
+export interface WorkspaceTabMoveStrings {
+  menuLabel: string;
+  title: string;
+  hint: string;
+  empty: string;
+}
+
+const STRINGS_ZH: WorkspaceTabMoveStrings = {
+  menuLabel: "挪到其他 Workspace…",
+  title: "挪动到 Workspace",
+  hint: "会话仍在原目录继续运行",
+  empty: "没有其它 Workspace 可选",
+};
+
+const STRINGS_EN: WorkspaceTabMoveStrings = {
+  menuLabel: "Move to workspace…",
+  title: "Move tab to workspace",
+  hint: "The agent keeps running in its original directory.",
+  empty: "No other workspace available",
+};
+
+export function resolveWorkspaceTabMoveStrings(
+  language: string | null | undefined,
+): WorkspaceTabMoveStrings {
+  return (language ?? "").toLowerCase().startsWith("zh") ? STRINGS_ZH : STRINGS_EN;
+}
 
 export interface WorkspaceTabMoveWorkspace {
   /** Persistence key from `buildWorkspaceTabPersistenceKey`. */
   workspaceKey: string;
   workspaceId: string;
+  /** Sidebar project header: `projectCustomName ?? projectDisplayName ?? derived`. */
+  projectName: string;
   name: string;
+  currentBranch: string | null;
+  /** Sidebar meta label: `worktreeSlug ?? shortenPath(workspaceDirectory)`. */
+  workspaceDirectoryLabel: string;
   archiving: boolean;
 }
 
@@ -39,25 +77,38 @@ export interface WorkspaceTabMoveStore {
   hideAgent(workspaceKey: string, agentId: string): void;
 }
 
-export function buildWorkspaceDisplayName(workspace: {
-  title?: string | null;
-  name?: string | null;
-  workspaceDirectory?: string | null;
+/** Mirrors `resolveSidebarWorkspacePrimaryLabel`. */
+export function resolveWorkspaceTabMoveRowLabel(input: {
+  workspace: { name: string; currentBranch: string | null };
+  titleSource: WorkspaceTabMoveTitleSource;
 }): string {
-  const title = workspace.title?.trim();
-  if (title) {
-    return title;
+  if (input.titleSource === "branch") {
+    return input.workspace.currentBranch ?? input.workspace.name;
   }
-  const name = workspace.name?.trim();
-  if (name) {
-    return name;
+  return input.workspace.name;
+}
+
+export interface WorkspaceTabMoveGroup {
+  projectName: string;
+  workspaces: WorkspaceTabMoveWorkspace[];
+}
+
+/** Groups targets by project name, preserving the sidebar's first-seen order. */
+export function groupWorkspaceTabMoveTargets(
+  workspaces: readonly WorkspaceTabMoveWorkspace[],
+): WorkspaceTabMoveGroup[] {
+  const groups: WorkspaceTabMoveGroup[] = [];
+  const byProject = new Map<string, WorkspaceTabMoveGroup>();
+  for (const workspace of workspaces) {
+    let group = byProject.get(workspace.projectName);
+    if (!group) {
+      group = { projectName: workspace.projectName, workspaces: [] };
+      byProject.set(workspace.projectName, group);
+      groups.push(group);
+    }
+    group.workspaces.push(workspace);
   }
-  const directory = workspace.workspaceDirectory?.trim() ?? "";
-  if (!directory) {
-    return "";
-  }
-  const segments = directory.split(/[/\\]/).filter(Boolean);
-  return segments[segments.length - 1] ?? directory;
+  return groups;
 }
 
 export function resolveWorkspaceTabMoveSource(input: {
@@ -91,6 +142,7 @@ export function listWorkspaceTabMoveTargets(input: {
 export function buildMoveToWorkspaceMenuEntry(input: {
   tab: WorkspaceTab;
   onSelect: (tab: WorkspaceTab) => void;
+  strings: WorkspaceTabMoveStrings;
 }): WorkspaceTabMenuEntry | null {
   if (input.tab.target.kind !== "agent") {
     return null;
@@ -98,7 +150,7 @@ export function buildMoveToWorkspaceMenuEntry(input: {
   return {
     kind: "item",
     key: MOVE_TO_WORKSPACE_MENU_KEY,
-    label: MOVE_TO_WORKSPACE_LABEL,
+    label: input.strings.menuLabel,
     testID: MOVE_TO_WORKSPACE_MENU_KEY,
     onSelect: () => {
       input.onSelect(input.tab);
@@ -115,6 +167,7 @@ export function insertMoveToWorkspaceMenuEntry(input: {
   entries: readonly WorkspaceTabMenuEntry[];
   tab: WorkspaceTab;
   onSelect: (tab: WorkspaceTab) => void;
+  strings: WorkspaceTabMoveStrings;
 }): WorkspaceTabMenuEntry[] {
   const entry = buildMoveToWorkspaceMenuEntry(input);
   if (!entry) {
