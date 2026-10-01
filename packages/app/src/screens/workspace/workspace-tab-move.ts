@@ -31,6 +31,15 @@ export const TAB_WORKSPACE_LABEL = "paseo.tab-workspace";
 /** Zero-padded position of the agent tab inside its pane row. */
 export const TAB_ORDER_LABEL = "paseo.tab-order";
 
+/**
+ * Daemon-synced close intent. The wire schema only accepts string values, so a
+ * label can never be deleted client-side — `"1"` means "the user closed this
+ * tab, close it everywhere", and `""` (written by any later open/move/broadcast)
+ * reverts to open. Enforcement treats any non-empty value as closed, so a tab
+ * the user closed is never resurrected by the reconciler.
+ */
+export const TAB_CLOSED_LABEL = "paseo.tab-closed";
+
 export function formatTabOrderLabel(index: number): string {
   return String(Math.max(0, Math.floor(index))).padStart(6, "0");
 }
@@ -53,8 +62,16 @@ export function buildTabWorkspaceLabels(
   return {
     ...currentLabels,
     [TAB_WORKSPACE_LABEL]: workspaceId.trim(),
+    [TAB_CLOSED_LABEL]: "",
     ...(tabOrder == null ? {} : { [TAB_ORDER_LABEL]: formatTabOrderLabel(tabOrder) }),
   };
+}
+
+/** Close intent: keep the workspace label so a later reopen lands in place. */
+export function buildTabClosedLabels(
+  currentLabels: Readonly<Record<string, string>> | null | undefined,
+): Record<string, string> {
+  return { ...currentLabels, [TAB_CLOSED_LABEL]: "1" };
 }
 
 /**
@@ -83,13 +100,19 @@ export function planTabOrderEnforcement(input: {
 }
 
 /**
- * Enforcement plan for the synced label: close the agent tab everywhere except
- * the labeled target, and open it in the target when it is missing there.
+ * Enforcement plan for the synced label: a closed tombstone wins over any
+ * placement label (close the tab everywhere); otherwise close the agent tab
+ * everywhere except the labeled target, and open it in the target when it is
+ * missing there.
  */
 export function planTabWorkspaceEnforcement(input: {
   targetWorkspaceKey: string | null;
   workspaceKeysWithTab: readonly string[];
+  closed?: boolean;
 }): { closeIn: string[]; ensureIn: string | null } {
+  if (input.closed) {
+    return { closeIn: [...input.workspaceKeysWithTab], ensureIn: null };
+  }
   const targetWorkspaceKey = input.targetWorkspaceKey?.trim() || null;
   if (!targetWorkspaceKey) {
     return { closeIn: [], ensureIn: null };
