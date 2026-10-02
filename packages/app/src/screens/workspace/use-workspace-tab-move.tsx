@@ -201,10 +201,12 @@ export function WorkspaceTabMoveSheet({
  * has traveled — the built-in tab reorder keeps the first few pixels.
  * Web/desktop only; never installs on native.
  */
-export function useWorkspaceTabMoveDnd(): void {
+export function useWorkspaceTabMoveDnd(workspaceKey?: string | null): void {
   const { t } = useTranslation();
   const tRef = useRef(t);
   tRef.current = t;
+  const workspaceKeyRef = useRef(workspaceKey);
+  workspaceKeyRef.current = workspaceKey;
 
   useEffect(() => {
     if (!isWeb || typeof document === "undefined") {
@@ -299,12 +301,20 @@ export function useWorkspaceTabMoveDnd(): void {
       if (!targetWorkspaceKey) {
         return;
       }
-      const source = findAgentTabByTestIdentity(suffix);
+      const source = findAgentTabByTestIdentity(suffix, workspaceKeyRef.current);
       if (!source || source.workspaceKey === targetWorkspaceKey) {
         return;
       }
       const separator = targetWorkspaceKey.indexOf(":");
-      if (separator <= 0) {
+      const sourceSeparator = source.workspaceKey.indexOf(":");
+      if (separator <= 0 || sourceSeparator <= 0) {
+        return;
+      }
+      // A tab stays on the host that owns the agent — dropping onto another
+      // server's workspace row would park a foreign agent's tab there.
+      if (
+        targetWorkspaceKey.slice(0, separator) !== source.workspaceKey.slice(0, sourceSeparator)
+      ) {
         return;
       }
       moveAgentTabToWorkspace({
