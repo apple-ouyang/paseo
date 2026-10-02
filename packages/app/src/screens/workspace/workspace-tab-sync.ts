@@ -10,7 +10,6 @@ import {
   formatTabOrderLabel,
   mergePendingTabLabels,
   moveWorkspaceTab,
-  pendingTabLabelsSatisfied,
   planTabOrderEnforcement,
   planTabWorkspaceEnforcement,
   TAB_CLOSED_LABEL,
@@ -53,8 +52,12 @@ const PENDING_LABEL_TTL_MS = 15_000;
 const SWEEP_INTERVAL_MS = 30_000;
 const LAYOUT_PUBLISH_DEBOUNCE_MS = 150;
 
-interface PendingTabLabelWrite extends PendingTabLabels {
-  at: number;
+/** Each written field ages on its own clock: a fresh order publish must not
+ * extend the suppression window of an earlier workspace/closed intent. */
+interface PendingTabLabelWrite {
+  workspaceId?: { value: string; at: number };
+  closed?: { value: boolean; at: number };
+  order?: { value: string; at: number };
 }
 
 let internalSync = false;
@@ -68,8 +71,50 @@ function markPending(serverId: string, agentId: string, patch: PendingTabLabels)
   const key = pendingKey(serverId, agentId);
   // Merge, not replace: an order publish landing while a move/close write is
   // still in flight must keep the earlier workspaceId/closed intent, or the
-  // next pass reads the stale label and snaps the tab back.
-  pendingLabels.set(key, { ...pendingLabels.get(key), at: Date.now(), ...patch });
+  // next pass reads the stale label and snaps the tab back. Every field keeps
+  // its own timestamp so a later patch cannot refresh an older one's TTL.
+  const next = { ...pendingLabels.get(key) };
+  const at = Date.now();
+  if (patch.workspaceId !== undefined) {
+    next.workspaceId = { value: patch.workspaceId, at };
+  }
+  if (patch.closed !== undefined) {
+    next.closed = { value: patch.closed, at };
+  }
+  if (patch.order !== undefined) {
+    next.order = { value: patch.order, at };
+  }
+  pendingLabels.set(key, next);
+}
+
+/** Pending values that are neither satisfied nor expired, as plain labels. */
+function livePendingFields(
+  pending: PendingTabLabelWrite,
+  stored: Record<string, string> | null,
+): PendingTabLabels {
+  const live: PendingTabLabels = {};
+  if (
+    pending.workspaceId &&
+    pending.workspaceId.value !== stored?.[TAB_WORKSPACE_LABEL] &&
+    Date.now() - pending.workspaceId.at <= PENDING_LABEL_TTL_MS
+  ) {
+    live.workspaceId = pending.workspaceId.value;
+  }
+  if (
+    pending.closed !== undefined &&
+    Boolean(stored?.[TAB_CLOSED_LABEL]) !== pending.closed.value &&
+    Date.now() - pending.closed.at <= PENDING_LABEL_TTL_MS
+  ) {
+    live.closed = pending.closed.value;
+  }
+  if (
+    pending.order !== undefined &&
+    pending.order.value !== stored?.[TAB_ORDER_LABEL] &&
+    Date.now() - pending.order.at <= PENDING_LABEL_TTL_MS
+  ) {
+    live.order = pending.order.value;
+  }
+  return live;
 }
 
 function agentLabelsFor(serverId: string, agentId: string): Record<string, string> | null {
@@ -85,14 +130,12 @@ function effectiveLabels(serverId: string, agentId: string): Record<string, stri
   if (!pending) {
     return current ?? {};
   }
-  if (
-    pendingTabLabelsSatisfied(pending, current) ||
-    Date.now() - pending.at > PENDING_LABEL_TTL_MS
-  ) {
+  const live = livePendingFields(pending, current);
+  if (live.workspaceId === undefined && live.closed === undefined && live.order === undefined) {
     pendingLabels.delete(key);
     return current ?? {};
   }
-  return mergePendingTabLabels(current, pending);
+  return mergePendingTabLabels(current, live);
 }
 
 interface TabSyncClient {
