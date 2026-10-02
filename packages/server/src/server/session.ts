@@ -4191,7 +4191,7 @@ export class Session {
         throw new Error(`Working directory does not exist or is not a directory: ${requestedCwd}`);
       }
       const trimmedPrompt = initialPrompt?.trim();
-      const { provisionalTitle } = resolveCreateAgentTitles({
+      const { explicitTitle, provisionalTitle } = resolveCreateAgentTitles({
         configTitle: config.title,
         initialPrompt: trimmedPrompt,
       });
@@ -4253,6 +4253,20 @@ export class Session {
       );
       createdAgentId = snapshot.id;
       await this.agentUpdates.forwardLiveAgent(snapshot);
+      // An explicit create_agent title is the caller's decision; only the prompt-derived
+      // provisional title (first line of the prompt) is replaceable by the generator.
+      if (!explicitTitle && trimmedPrompt) {
+        this.workspaceAutoName.scheduleForAgentTitle(
+          {
+            agentId: snapshot.id,
+            cwd: resolvedIntent.config.cwd,
+            firstAgentContext,
+            provisionalTitle,
+            readCurrentTitle: async () => (await this.agentStorage.get(snapshot.id))?.title ?? null,
+          },
+          { currentSelection: this.getFocusedAgentSelectionForCwd(resolvedIntent.config.cwd) },
+        );
+      }
       if (resolvedIntent.createdDirectoryWorkspace && trimmedPrompt) {
         this.workspaceAutoName.scheduleForDirectory(
           {
@@ -8009,6 +8023,16 @@ export class Session {
     if (stored && !stored.title && !stored.lastUserMessageAt) {
       const { provisionalTitle } = resolveCreateAgentTitles({ initialPrompt: text });
       if (provisionalTitle) await this.agentManager.setTitle(agentId, provisionalTitle);
+      this.workspaceAutoName.scheduleForAgentTitle(
+        {
+          agentId,
+          cwd: stored.cwd,
+          firstAgentContext: { prompt: text, attachments: [] },
+          provisionalTitle,
+          readCurrentTitle: async () => (await this.agentStorage.get(agentId))?.title ?? null,
+        },
+        { currentSelection: this.getFocusedAgentSelectionForCwd(stored.cwd) },
+      );
     }
   }
 

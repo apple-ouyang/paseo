@@ -103,6 +103,64 @@ export class WorkspaceAutoName {
     );
   }
 
+  /**
+   * Replaces the provisional first-line title of a freshly created agent tab with a
+   * generated one. Reuses the workspace metadata generator, so provider selection,
+   * fallbacks, and `paseo.json` title instructions match the workspace path.
+   *
+   * The write is skipped unless the agent still carries the title this path derived
+   * from the first prompt: an explicit `create_agent` title or a manual rename wins.
+   */
+  scheduleForAgentTitle(
+    input: {
+      agentId: string;
+      cwd: string;
+      firstAgentContext: FirstAgentContext;
+      provisionalTitle: string | null;
+      /**
+       * Reads the agent's persisted title. The live `ManagedAgent` does not carry it, so
+       * the caller (which owns the storage handle) supplies the read.
+       */
+      readCurrentTitle: () => Promise<string | null>;
+    },
+    context: ScheduleContext = {},
+  ): void {
+    this.schedule(
+      () =>
+        this.maybeAutoNameAgentTitle({
+          ...input,
+          currentSelection: context.currentSelection ?? null,
+        }),
+      { cwd: input.cwd, message: "Failed to auto-name agent title" },
+    );
+  }
+
+  private async maybeAutoNameAgentTitle(input: {
+    agentId: string;
+    cwd: string;
+    firstAgentContext: FirstAgentContext;
+    provisionalTitle: string | null;
+    readCurrentTitle: () => Promise<string | null>;
+    currentSelection: CurrentSelection;
+  }): Promise<void> {
+    const generated = await this.generateFromContext({
+      cwd: input.cwd,
+      firstAgentContext: input.firstAgentContext,
+      currentSelection: input.currentSelection,
+    });
+    const title = generated?.title ?? null;
+    if (!title) {
+      return;
+    }
+    const currentTitle = await input.readCurrentTitle();
+    const replaceable =
+      currentTitle === null || currentTitle === "" || currentTitle === input.provisionalTitle;
+    if (!replaceable || currentTitle === title) {
+      return;
+    }
+    await this.agentManager.setTitle(input.agentId, title);
+  }
+
   private async maybeAutoNameWorkspaceBranchForFirstAgent(input: {
     workspace: PersistedWorkspaceRecord;
     firstAgentContext: FirstAgentContext;
