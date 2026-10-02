@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Same storage mock the neighboring store tests use (workspace-layout-store
+// .test.ts, explorer-sidebar.test.ts, ...): the app persists layouts through
+// AsyncStorage, which has no Node build.
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
     getItem: vi.fn(async () => null),
