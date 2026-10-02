@@ -8,6 +8,7 @@ import {
   RequestError,
   ndJsonStream,
   type Agent,
+  type AgentCapabilities,
   PermissionOption,
   PromptResponse,
   RequestPermissionRequest,
@@ -26,6 +27,7 @@ import {
   deriveModelDefinitionsFromACP,
   deriveModesFromACP,
   mapACPUsage,
+  readACPConversationRewindMethod,
   resolveACPModeSelection,
   resolveACPModelSelection,
   summarizeACPRequestError,
@@ -849,6 +851,178 @@ describe("ACP context-window usage", () => {
         turnId: expect.any(String),
       },
     ]);
+  });
+});
+
+describe("ACP conversation rewind", () => {
+  interface ACPConversationRewindInternals {
+    sessionId: string | null;
+    capabilities: AgentCapabilityFlags;
+    conversationRewindMethod: string | null;
+    persistedHistory: unknown[];
+    historyPending: boolean;
+    connection: {
+      extMethod?: (
+        method: string,
+        params: Record<string, unknown>,
+      ) => Promise<Record<string, unknown>>;
+      loadSession?: (input: Record<string, unknown>) => Promise<SessionStateResponse>;
+      prompt?: (input: Record<string, unknown>) => Promise<PromptResponse>;
+    };
+    bindConversationRewind(capabilities: AgentCapabilities | null): void;
+  }
+
+  const rewindCapability = {
+    _meta: { conversationRewind: { method: "_paseo/session/revert", target: "user-message-id" } },
+  } as AgentCapabilities;
+
+  test("reads only a well-formed user-message-id capability", () => {
+    expect(readACPConversationRewindMethod(null)).toBeNull();
+    expect(readACPConversationRewindMethod({} as AgentCapabilities)).toBeNull();
+    expect(readACPConversationRewindMethod(rewindCapability)).toBe("_paseo/session/revert");
+    expect(
+      readACPConversationRewindMethod({
+        _meta: { conversationRewind: { method: "_paseo/session/revert" } },
+      } as AgentCapabilities),
+    ).toBe("_paseo/session/revert");
+    expect(
+      readACPConversationRewindMethod({
+        _meta: { conversationRewind: { method: "_paseo/session/revert", target: "turn-index" } },
+      } as AgentCapabilities),
+    ).toBeNull();
+    expect(
+      readACPConversationRewindMethod({
+        _meta: { conversationRewind: { method: 7 } },
+      } as unknown as AgentCapabilities),
+    ).toBeNull();
+  });
+
+  test("advertises rewind per session without mutating the shared capability object", () => {
+    const session = createSession();
+    const internals = asInternals<ACPConversationRewindInternals>(session);
+    const shared = internals.capabilities;
+
+    internals.bindConversationRewind(rewindCapability);
+
+    expect(session.capabilities.supportsRewindConversation).toBe(true);
+    expect(session.capabilities).not.toBe(shared);
+    expect(shared.supportsRewindConversation).toBeUndefined();
+  });
+
+  test("stays hidden when the provider advertises nothing", () => {
+    const session = createSession();
+    const internals = asInternals<ACPConversationRewindInternals>(session);
+
+    internals.bindConversationRewind({} as AgentCapabilities);
+
+    expect(session.capabilities.supportsRewindConversation).toBeUndefined();
+    expect(internals.conversationRewindMethod).toBeNull();
+  });
+
+  test("rebinds to the fork the provider returns and replays its history", async () => {
+    const session = createSessionWithConfig({ provider: "dsh" });
+    const internals = asInternals<ACPConversationRewindInternals>(session);
+    internals.sessionId = "session-1";
+    internals.bindConversationRewind(rewindCapability);
+
+    const extMethod = vi.fn(async () => ({ sessionId: "session-2" }));
+    const loadSession = vi.fn(async () => {
+      await session.sessionUpdate({
+        sessionId: "session-2",
+        update: {
+          sessionUpdate: "user_message_chunk",
+          messageId: "user-1",
+          content: { type: "text", text: "hello" },
+        } as SessionUpdate,
+      });
+      await session.sessionUpdate({
+        sessionId: "session-2",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "assistant-1",
+          content: { type: "text", text: "hi" },
+        } as SessionUpdate,
+      });
+      return { configOptions: [] } as SessionStateResponse;
+    });
+    internals.connection = { extMethod, loadSession };
+
+    await session.revertConversation({ messageId: "client-1" });
+
+    expect(extMethod).toHaveBeenCalledWith("_paseo/session/revert", {
+      sessionId: "session-1",
+      messageId: "client-1",
+    });
+    expect(loadSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-2",
+        cwd: "/tmp/paseo-acp-test",
+      }),
+    );
+    expect(session.id).toBe("session-2");
+
+    const history: unknown[] = [];
+    for await (const event of session.streamHistory()) {
+      if (event.type === "timeline") history.push(event.item);
+    }
+    expect(history).toEqual([
+      { type: "user_message", text: "hello", messageId: "user-1" },
+      { type: "assistant_message", text: "hi", messageId: "assistant-1" },
+    ]);
+  });
+
+  test("refuses to rewind without an advertised extension", async () => {
+    const session = createSession();
+    const internals = asInternals<ACPConversationRewindInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = {
+      extMethod: vi.fn(async () => ({})),
+      loadSession: vi.fn(async () => ({ configOptions: [] }) as SessionStateResponse),
+    };
+
+    await expect(session.revertConversation({ messageId: "client-1" })).rejects.toThrow(
+      "does not support conversation rewind",
+    );
+    expect(internals.connection.extMethod).not.toHaveBeenCalled();
+  });
+
+  test("fails loudly when the provider returns no fork session id", async () => {
+    const session = createSessionWithConfig({ provider: "dsh" });
+    const internals = asInternals<ACPConversationRewindInternals>(session);
+    internals.sessionId = "session-1";
+    internals.bindConversationRewind(rewindCapability);
+    const loadSession = vi.fn(async () => ({ configOptions: [] }) as SessionStateResponse);
+    internals.connection = { extMethod: vi.fn(async () => ({})), loadSession };
+
+    await expect(session.revertConversation({ messageId: "client-1" })).rejects.toThrow(
+      "returned no session id",
+    );
+    expect(loadSession).not.toHaveBeenCalled();
+  });
+
+  test("sends the client message id in prompt _meta only for rewind-capable agents", async () => {
+    for (const advertised of [false, true]) {
+      const session = createSessionWithConfig({ provider: "dsh" });
+      const internals = asInternals<ACPConversationRewindInternals>(session);
+      internals.sessionId = "session-1";
+      if (advertised) internals.bindConversationRewind(rewindCapability);
+      const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+      internals.connection = { prompt };
+
+      await session.startTurn("hello", { clientMessageId: "client-1" });
+
+      const sent = prompt.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(sent).toMatchObject({
+        sessionId: "session-1",
+        messageId: "client-1",
+        prompt: [{ type: "text", text: "hello" }],
+      });
+      if (advertised) {
+        expect(sent._meta).toEqual({ clientMessageId: "client-1" });
+      } else {
+        expect(sent).not.toHaveProperty("_meta");
+      }
+    }
   });
 });
 
