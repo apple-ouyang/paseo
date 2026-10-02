@@ -49,6 +49,65 @@ export const TAB_ORDER_LABEL = "paseo.tab-order";
  */
 export const TAB_CLOSED_LABEL = "paseo.tab-closed";
 
+/**
+ * A label write this client just issued but the daemon has not echoed back
+ * yet. `undefined` = the gesture did not touch that key.
+ */
+export interface PendingTabLabels {
+  workspaceId?: string;
+  closed?: boolean;
+  order?: string;
+}
+
+/**
+ * Merge local intent over the stored labels until the daemon echo lands.
+ * Enforcement and broadcast must read this merged view: reading the raw
+ * stored labels during the echo round-trip is what made a drag bounce back
+ * for one tick (and let a not-yet-converged client stomp the in-flight move).
+ */
+export function mergePendingTabLabels(
+  labels: Record<string, string> | null | undefined,
+  pending: PendingTabLabels | undefined,
+): Record<string, string> {
+  if (!pending) {
+    return { ...labels };
+  }
+  const merged = { ...labels };
+  if (pending.workspaceId !== undefined) {
+    merged[TAB_WORKSPACE_LABEL] = pending.workspaceId;
+  }
+  if (pending.closed !== undefined) {
+    merged[TAB_CLOSED_LABEL] = pending.closed ? "1" : "";
+  }
+  if (pending.order !== undefined) {
+    merged[TAB_ORDER_LABEL] = pending.order;
+  }
+  return merged;
+}
+
+/**
+ * A pending write can be retired once the echoed labels carry every key it
+ * wrote. Until then the stored copy may still hold the pre-gesture value.
+ */
+export function pendingTabLabelsSatisfied(
+  pending: PendingTabLabels,
+  labels: Record<string, string> | null | undefined,
+): boolean {
+  if (
+    pending.workspaceId !== undefined &&
+    (labels?.[TAB_WORKSPACE_LABEL] ?? "") !== pending.workspaceId
+  ) {
+    return false;
+  }
+  if (pending.closed !== undefined && Boolean(labels?.[TAB_CLOSED_LABEL]) !== pending.closed) {
+    return false;
+  }
+  if (pending.order !== undefined && (labels?.[TAB_ORDER_LABEL] ?? "") !== pending.order) {
+    return false;
+  }
+  return true;
+}
+
 export function formatTabOrderLabel(index: number): string {
   return String(Math.max(0, Math.floor(index))).padStart(6, "0");
 }
@@ -266,10 +325,13 @@ export function listWorkspaceTabMoveTargets(input: {
   );
 }
 
-export function buildMoveToWorkspaceMenuEntry(input: {
-  tab: WorkspaceTab;
-  onSelect: (tab: WorkspaceTab) => void;
-  strings: WorkspaceTabMoveStrings;
+/** The menu hands us a `WorkspaceTabDescriptor`; both helpers only need these. */
+export type WorkspaceTabLike = Pick<WorkspaceTab, "tabId" | "target">;
+
+export function buildMoveToWorkspaceMenuEntry<TTab extends WorkspaceTabLike>(input: {
+  tab: TTab;
+  onSelect: (tab: TTab) => void;
+  strings: Pick<WorkspaceTabMoveStrings, "menuLabel">;
 }): WorkspaceTabMenuEntry | null {
   if (input.tab.target.kind !== "agent") {
     return null;
@@ -290,11 +352,11 @@ export function buildMoveToWorkspaceMenuEntry(input: {
  * appends it when that group is absent. Non-agent tabs are returned unchanged,
  * and an existing move entry is never duplicated.
  */
-export function insertMoveToWorkspaceMenuEntry(input: {
+export function insertMoveToWorkspaceMenuEntry<TTab extends WorkspaceTabLike>(input: {
   entries: readonly WorkspaceTabMenuEntry[];
-  tab: WorkspaceTab;
-  onSelect: (tab: WorkspaceTab) => void;
-  strings: WorkspaceTabMoveStrings;
+  tab: TTab;
+  onSelect: (tab: TTab) => void;
+  strings: Pick<WorkspaceTabMoveStrings, "menuLabel">;
 }): WorkspaceTabMenuEntry[] {
   const entry = buildMoveToWorkspaceMenuEntry(input);
   if (!entry) {

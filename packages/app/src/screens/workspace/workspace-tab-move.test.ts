@@ -8,8 +8,10 @@ import {
   groupWorkspaceTabMoveTargets,
   insertMoveToWorkspaceMenuEntry,
   listWorkspaceTabMoveTargets,
+  mergePendingTabLabels,
   moveWorkspaceTab,
   parseTabOrderLabel,
+  pendingTabLabelsSatisfied,
   planTabOrderEnforcement,
   planTabWorkspaceEnforcement,
   resolveSidebarDropWorkspaceKey,
@@ -493,5 +495,42 @@ describe("moveWorkspaceTab", () => {
     );
     expect(moved).toBe(false);
     expect(store.openTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("pending label merge", () => {
+  const stored = {
+    [TAB_WORKSPACE_LABEL]: "ws-a",
+    [TAB_ORDER_LABEL]: "000001",
+    [TAB_CLOSED_LABEL]: "",
+  };
+
+  it("merges local intent over stale stored labels during the echo window", () => {
+    expect(mergePendingTabLabels(stored, { workspaceId: "ws-b" })).toEqual({
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_ORDER_LABEL]: "000001",
+      [TAB_CLOSED_LABEL]: "",
+    });
+    expect(mergePendingTabLabels(stored, { closed: true })[TAB_CLOSED_LABEL]).toBe("1");
+    expect(mergePendingTabLabels(stored, { order: "000004" })[TAB_ORDER_LABEL]).toBe("000004");
+  });
+
+  it("returns the stored labels untouched when nothing is pending", () => {
+    expect(mergePendingTabLabels(stored, undefined)).toEqual(stored);
+    expect(mergePendingTabLabels(null, undefined)).toEqual({});
+  });
+
+  it("retires a pending write once the echo carries every written key", () => {
+    const pending = { workspaceId: "ws-b", closed: false };
+    expect(
+      pendingTabLabelsSatisfied(pending, {
+        [TAB_WORKSPACE_LABEL]: "ws-b",
+        [TAB_CLOSED_LABEL]: "",
+      }),
+    ).toBe(true);
+    // The echo has not landed yet: the stored copy still holds the old value.
+    expect(pendingTabLabelsSatisfied(pending, stored)).toBe(false);
+    expect(pendingTabLabelsSatisfied({ closed: true }, { [TAB_CLOSED_LABEL]: "" })).toBe(false);
+    expect(pendingTabLabelsSatisfied({ order: "000002" }, stored)).toBe(false);
   });
 });
