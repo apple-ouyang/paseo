@@ -65,7 +65,11 @@ function pendingKey(serverId: string, agentId: string): string {
 }
 
 function markPending(serverId: string, agentId: string, patch: PendingTabLabels): void {
-  pendingLabels.set(pendingKey(serverId, agentId), { at: Date.now(), ...patch });
+  const key = pendingKey(serverId, agentId);
+  // Merge, not replace: an order publish landing while a move/close write is
+  // still in flight must keep the earlier workspaceId/closed intent, or the
+  // next pass reads the stale label and snaps the tab back.
+  pendingLabels.set(key, { ...pendingLabels.get(key), at: Date.now(), ...patch });
 }
 
 function agentLabelsFor(serverId: string, agentId: string): Record<string, string> | null {
@@ -91,9 +95,25 @@ function effectiveLabels(serverId: string, agentId: string): Record<string, stri
   return mergePendingTabLabels(current, pending);
 }
 
+interface TabSyncClient {
+  updateAgent(agentId: string, updates: { labels: Record<string, string> }): unknown;
+}
+
+const defaultClientResolver = (serverId: string): TabSyncClient | null =>
+  getHostRuntimeStore().getSnapshot(serverId)?.client ?? null;
+
+let clientResolver: (serverId: string) => TabSyncClient | null = defaultClientResolver;
+
+/** Tests inject a fake daemon client here; production uses the runtime store. */
+export function setWorkspaceTabSyncClientResolver(
+  resolver: ((serverId: string) => TabSyncClient | null) | null,
+): void {
+  clientResolver = resolver ?? defaultClientResolver;
+}
+
 function writeAgentLabels(serverId: string, agentId: string, labels: Record<string, string>): void {
   try {
-    const client = getHostRuntimeStore().getSnapshot(serverId)?.client;
+    const client = clientResolver(serverId);
     if (!client) {
       return;
     }
@@ -155,10 +175,12 @@ function findAgentTabCopies(
   return { workspaceKeysWithTab, tabIdByWorkspaceKey };
 }
 
-function enforceSyncedAgent(serverId: string, agentId: string): void {
+function enforceSyncedAgent(serverId: string, agentId: string, agent?: Agent): void {
   const labels = effectiveLabels(serverId, agentId);
   const workspaceId = labels[TAB_WORKSPACE_LABEL];
-  const closed = Boolean(labels[TAB_CLOSED_LABEL]);
+  // Archiving must win over a stale placement label: an archived agent's
+  // moved tab would otherwise be pinned-open forever and reopened here.
+  const closed = Boolean(labels[TAB_CLOSED_LABEL]) || Boolean(agent?.archivedAt);
   if ((!workspaceId || typeof workspaceId !== "string") && !closed) {
     return;
   }
@@ -210,7 +232,7 @@ function enforceSyncedTabs(): void {
   try {
     const sessions = useSessionStore.getState().sessions;
     for (const serverId of Object.keys(sessions)) {
-      eachSessionAgent(serverId, (agentId) => enforceSyncedAgent(serverId, agentId));
+      eachSessionAgent(serverId, (agentId, agent) => enforceSyncedAgent(serverId, agentId, agent));
     }
   } catch {
     // Best-effort convergence; the next sweep retries.
@@ -402,7 +424,10 @@ export function moveAgentTabToWorkspace(input: {
  * the live tab: deterministic target ids and plain tab ids both match (the row
  * uses the deterministic id for every tab kind except `new_tab`).
  */
-export function findAgentTabByTestIdentity(identity: string): {
+export function findAgentTabByTestIdentity(
+  identity: string,
+  preferredWorkspaceKey?: string | null,
+): {
   workspaceKey: string;
   tabId: string;
   agentId: string;
@@ -411,6 +436,7 @@ export function findAgentTabByTestIdentity(identity: string): {
   if (!suffix) {
     return null;
   }
+  const matches: { workspaceKey: string; tabId: string; agentId: string }[] = [];
   const layoutState = useWorkspaceLayoutStore.getState();
   for (const [workspaceKey, layout] of Object.entries(layoutState.layoutByWorkspace ?? {})) {
     for (const tab of collectAllTabs(layout.root)) {
@@ -418,11 +444,20 @@ export function findAgentTabByTestIdentity(identity: string): {
         continue;
       }
       if (tab.tabId === suffix || buildDeterministicWorkspaceTabId(tab.target) === suffix) {
-        return { workspaceKey, tabId: tab.tabId, agentId: tab.target.agentId };
+        matches.push({
+          workspaceKey,
+          tabId: tab.tabId,
+          agentId: tab.target.agentId,
+        });
       }
     }
   }
-  return null;
+  // While a remote move is still converging, the same agent id can exist in
+  // two layouts with identical chip ids — prefer the copy in the workspace
+  // the user is actually dragging out of instead of an arbitrary match.
+  return (
+    matches.find((match) => match.workspaceKey === preferredWorkspaceKey) ?? matches[0] ?? null
+  );
 }
 
 /** Locate which workspace layout currently hosts an agent tab. */
