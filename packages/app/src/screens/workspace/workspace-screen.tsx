@@ -1852,7 +1852,7 @@ function WorkspaceScreenContent({
   useEffect(() => {
     startWorkspaceTabSync();
   }, []);
-  useWorkspaceTabMoveDnd();
+  useWorkspaceTabMoveDnd(persistenceKey);
   const { movingTab, openMovePicker, closeMovePicker } = useWorkspaceTabMovePicker();
   useSyncWorkspaceActiveBrowser({
     workspaceLayout,
