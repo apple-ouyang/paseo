@@ -277,9 +277,10 @@ export function createAgentUpdatesService(deps: AgentUpdatesServiceDeps): AgentU
     // it back with the same `scope: "active"` rule. Resolve membership for the
     // shared sequence against the active placement so a live update can never
     // announce an agent the next catch-up will drop.
-    const directoryProject = payload.workspaceId
-      ? await deps.buildActiveProjectPlacementForWorkspaceId(payload.workspaceId)
-      : null;
+    const directoryProject =
+      payload.workspaceId && !payload.archivedAt
+        ? await deps.buildActiveProjectPlacementForWorkspaceId(payload.workspaceId)
+        : null;
     for (const sub of observers) {
       const subscriberProject = sub.scope === "active" ? directoryProject : project;
       const matches =

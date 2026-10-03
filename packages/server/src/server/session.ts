@@ -1105,6 +1105,7 @@ export class Session {
       findWorkspaceIdForCwd: (cwd) => this.findWorkspaceIdForCwd(cwd),
       listActiveWorkspaces: () => this.listActiveWorkspaceRefs(),
       archiveWorkspaceRecord: (workspaceId) => this.archiveWorkspaceRecord(workspaceId),
+      emitArchivedAgent: (agentId) => this.emitArchivedAgentUpdate(agentId),
       emit: (message) => this.emit(message),
       emitAgentRemove: (agentId) => this.agentUpdates.removeAgent(agentId),
       emitWorkspaceUpdatesForWorkspaceIds: (workspaceIds) =>
@@ -3239,6 +3240,15 @@ export class Session {
     return { agentId, archivedAt };
   }
 
+  private async emitArchivedAgentUpdate(agentId: string): Promise<void> {
+    const record = await this.agentStorage.get(agentId);
+    if (record) {
+      await this.agentUpdates.emitStoredRecord(record);
+    } else {
+      await this.agentUpdates.removeAgent(agentId);
+    }
+  }
+
   private async handleDetachAgentRequest(agentId: string, requestId: string): Promise<void> {
     this.sessionLogger.info({ agentId, requestId }, "Detaching agent from parent");
 
@@ -3604,6 +3614,7 @@ export class Session {
             {
               agentManager: this.agentManager,
               agentStorage: this.agentStorage,
+              emitArchivedAgent: (agentId) => this.emitArchivedAgentUpdate(agentId),
               killTerminalsForWorkspace: (id) =>
                 this.terminalController.killTerminalsForWorkspace(id),
               sessionLogger: this.sessionLogger,
@@ -7333,6 +7344,7 @@ export class Session {
           getWorkspace: (workspaceId) => this.workspaceRegistry.get(workspaceId),
           listActiveWorkspaces: () => this.listActiveWorkspaceRefs(),
           archiveWorkspaceRecord: (workspaceId) => this.archiveWorkspaceRecord(workspaceId),
+          emitArchivedAgent: (agentId) => this.emitArchivedAgentUpdate(agentId),
           emitWorkspaceUpdatesForWorkspaceIds: (workspaceIds) =>
             this.emitWorkspaceUpdatesForWorkspaceIds(workspaceIds),
           markWorkspaceArchiving: (workspaceIds, archivingAt) =>

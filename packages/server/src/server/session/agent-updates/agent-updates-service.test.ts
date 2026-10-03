@@ -97,6 +97,7 @@ function buildHarness() {
   const loggedErrors: unknown[][] = [];
   const payloadById = new Map<string, AgentSnapshotPayload>();
   const queuedPayloadBuilds: Promise<AgentSnapshotPayload>[] = [];
+  const sequencedProjects: Array<ProjectPlacementPayload | null> = [];
   const projectByWorkspaceId = new Map<string, ProjectPlacementPayload | null>();
   const activeProjectByWorkspaceId = new Map<string, ProjectPlacementPayload | null>();
   let providerVisible: (provider: string) => boolean = () => true;
@@ -138,13 +139,15 @@ function buildHarness() {
     emitWorkspaceUpdateForWorkspaceId: async (workspaceId) => {
       workspaceUpdates.push(workspaceId);
     },
-    sequenceAgentUpdate: (payload, agent, project, agentId, includeSequence) =>
-      directorySync.sequenceAgentUpdate(
+    sequenceAgentUpdate: (payload, agent, project, agentId, includeSequence) => {
+      sequencedProjects.push(project);
+      return directorySync.sequenceAgentUpdate(
         payload,
         agent && project ? { agent, project } : null,
         agentId,
         includeSequence,
-      ),
+      );
+    },
     logger: { error: (...args: unknown[]) => loggedErrors.push(args) } as unknown as pino.Logger,
   });
 
@@ -178,6 +181,9 @@ function buildHarness() {
     },
     queuePayloadBuilds(...payloads: Promise<AgentSnapshotPayload>[]) {
       queuedPayloadBuilds.push(...payloads);
+    },
+    sequencedProjects(): Array<ProjectPlacementPayload | null> {
+      return sequencedProjects;
     },
     agentUpdates(): AgentUpdatePayload[] {
       return emitted
@@ -460,6 +466,25 @@ describe("forwardLiveAgent", () => {
     expect(h.agentUpdates()).toEqual([
       { kind: "upsert", agent: expect.objectContaining({ id: "a" }), project: makeProject() },
     ]);
+  });
+
+  test("removes an archived agent from the shared active directory sequence", async () => {
+    const h = buildHarness();
+    h.service.beginSubscription({
+      subscriptionId: "sub",
+      filter: { includeArchived: true },
+    });
+    h.service.flushBootstrapped("sub");
+    h.register(
+      makeAgentPayload({ id: "a", workspaceId: "ws-1", archivedAt: "2026-03-02T00:00:00.000Z" }),
+    );
+
+    await h.service.forwardLiveAgent(h.managed("a"));
+
+    expect(h.agentUpdates()).toEqual([
+      { kind: "upsert", agent: expect.objectContaining({ id: "a" }), project: makeProject() },
+    ]);
+    expect(h.sequencedProjects()).toEqual([null]);
   });
 
   test("with no subscription, emits no agent_update but still updates the workspace", async () => {
