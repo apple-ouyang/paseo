@@ -935,6 +935,7 @@ describe("ACP tool-call detail mapping", () => {
     child.emit("exit", 0, null);
     await session.waitForTerminalExit({ sessionId: "session-1", terminalId });
     await session.releaseTerminal({ sessionId: "session-1", terminalId });
+    child.stdout!.emit("data", "tail-after-exit\n");
 
     await session.sessionUpdate({
       sessionId: "session-1",
@@ -972,7 +973,7 @@ describe("ACP tool-call detail mapping", () => {
       detail: {
         type: "shell",
         command: "echo devin-out",
-        output: "devin-out\n",
+        output: "devin-out\ntail-after-exit\n",
         exitCode: 0,
       },
     });

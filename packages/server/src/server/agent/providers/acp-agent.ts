@@ -131,6 +131,8 @@ import {
 import { withTimeout } from "../../../utils/promise-timeout.js";
 
 const ACP_AUTO_ACCEPT_FEATURE_ID = "auto_accept";
+const MAX_RELEASED_TERMINAL_RESULTS = 128;
+const MAX_RELEASED_TERMINAL_OUTPUT_BYTES = 1024 * 1024;
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -653,6 +655,7 @@ interface TerminalEntry {
   waitForExit: Promise<TerminalExit>;
   resolveExit: (exit: TerminalExit) => void;
   rejectExit: (error: Error) => void;
+  releasedResult?: TerminalResult;
 }
 
 interface TerminalResult {
@@ -2774,6 +2777,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     child.once("exit", (code, signal) => {
       const exit = { exitCode: code, signal };
       entry.exit = exit;
+      if (entry.releasedResult) {
+        entry.releasedResult.exit = exit;
+      }
       resolveExit(exit);
     });
 
@@ -2800,11 +2806,19 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (!entry.exit) {
       await this.terminateProcess(entry.child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 });
     }
-    this.releasedTerminalResults.set(params.terminalId, {
+    const result: TerminalResult = {
       output: entry.output,
       truncated: entry.truncated,
       exit: entry.exit,
-    });
+    };
+    entry.releasedResult = result;
+    syncReleasedTerminalResult(result, entry);
+    this.releasedTerminalResults.set(params.terminalId, result);
+    while (this.releasedTerminalResults.size > MAX_RELEASED_TERMINAL_RESULTS) {
+      const oldestId = this.releasedTerminalResults.keys().next().value;
+      if (oldestId === undefined) break;
+      this.releasedTerminalResults.delete(oldestId);
+    }
     this.terminalEntries.delete(params.terminalId);
   }
 
@@ -4082,12 +4096,30 @@ function isACPChooserRequest(options: PermissionOption[]): boolean {
 function appendTerminalOutput(entry: TerminalEntry, chunk: string): void {
   entry.output += chunk;
   const limit = entry.outputByteLimit;
-  if (!limit) {
-    return;
+  if (limit) {
+    while (Buffer.byteLength(entry.output, "utf8") > limit && entry.output.length > 0) {
+      entry.output = entry.output.slice(1);
+      entry.truncated = true;
+    }
   }
-  while (Buffer.byteLength(entry.output, "utf8") > limit && entry.output.length > 0) {
-    entry.output = entry.output.slice(1);
-    entry.truncated = true;
+  if (entry.releasedResult) {
+    syncReleasedTerminalResult(entry.releasedResult, entry);
+  }
+}
+
+function syncReleasedTerminalResult(result: TerminalResult, entry: TerminalEntry): void {
+  result.output = entry.output;
+  result.truncated = entry.truncated;
+  if (Buffer.byteLength(result.output, "utf8") > MAX_RELEASED_TERMINAL_OUTPUT_BYTES) {
+    let start = Math.max(0, result.output.length - MAX_RELEASED_TERMINAL_OUTPUT_BYTES);
+    while (
+      start < result.output.length &&
+      Buffer.byteLength(result.output.slice(start), "utf8") > MAX_RELEASED_TERMINAL_OUTPUT_BYTES
+    ) {
+      start += 1;
+    }
+    result.output = result.output.slice(start);
+    result.truncated = true;
   }
 }
 
