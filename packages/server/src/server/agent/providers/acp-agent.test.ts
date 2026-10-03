@@ -127,28 +127,35 @@ function createTurnCompletionWaiter(session: ACPAgentSession): {
   setTurnId: (turnId: string) => void;
 } {
   let expectedTurnId: string | null = null;
-  let completedTurnId: string | null = null;
+  let terminalEvent: Extract<AgentStreamEvent, { type: "turn_completed" | "turn_failed" }> | null =
+    null;
   let settled = false;
   let resolvePromise!: () => void;
-  const promise = new Promise<void>((resolve) => {
+  let rejectPromise!: (reason?: unknown) => void;
+  const promise = new Promise<void>((resolve, reject) => {
     resolvePromise = resolve;
+    rejectPromise = reject;
   });
   const settle = () => {
-    if (settled) return;
+    if (settled || !terminalEvent || terminalEvent.turnId !== expectedTurnId) return;
     settled = true;
     unsubscribe();
-    resolvePromise();
+    if (terminalEvent.type === "turn_failed") {
+      rejectPromise(new Error(`ACP turn failed: ${terminalEvent.error}`));
+    } else {
+      resolvePromise();
+    }
   };
   const unsubscribe = session.subscribe((event) => {
-    if (event.type !== "turn_completed") return;
-    completedTurnId = event.turnId;
-    if (expectedTurnId === event.turnId) settle();
+    if (event.type !== "turn_completed" && event.type !== "turn_failed") return;
+    terminalEvent = event;
+    settle();
   });
   return {
     promise,
     setTurnId: (turnId) => {
       expectedTurnId = turnId;
-      if (completedTurnId === turnId) settle();
+      settle();
     },
   };
 }
