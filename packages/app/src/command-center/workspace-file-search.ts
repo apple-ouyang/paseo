@@ -7,6 +7,7 @@ import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { clearCommandCenterFocusRestoreElement } from "@/utils/command-center-focus-restore";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
+import { planDaemonFileSearchRequest, resolveSuggestedFilePath } from "./file-search-query";
 import {
   describeWorkspaceFilePath,
   type WorkspaceFileSearchEntry,
@@ -43,8 +44,13 @@ function errorMessage(error: unknown): string {
 
 function describeFileEntries(
   entries: readonly DirectorySuggestionEntry[],
+  searchRoot: string | null,
 ): WorkspaceFileSearchEntry[] {
-  return entries.map(({ path }) => describeWorkspaceFilePath(path));
+  return entries.map(({ path }) =>
+    describeWorkspaceFilePath(
+      searchRoot ? resolveSuggestedFilePath({ root: searchRoot, path }) : path,
+    ),
+  );
 }
 
 export function useWorkspaceFileSearch(input: { enabled: boolean; query: string }): {
@@ -77,6 +83,10 @@ export function useWorkspaceFileSearch(input: { enabled: boolean; query: string 
     }
     const activeClient = client;
     const activeCwd = cwd;
+    // A typed absolute path may live outside the workspace, which the workspace-scoped search
+    // cannot reach. Re-root that query on the typed path's own directory and re-attach the root to
+    // the suggestions, so the row opens the same path the user named.
+    const plan = planDaemonFileSearchRequest({ query: input.query, workspaceRoot: activeCwd });
 
     let cancelled = false;
     setState((previous) => ({
@@ -89,8 +99,8 @@ export function useWorkspaceFileSearch(input: { enabled: boolean; query: string 
     async function search(): Promise<void> {
       try {
         const payload = await activeClient.getDirectorySuggestions({
-          cwd: activeCwd,
-          query: input.query,
+          cwd: plan?.cwd ?? activeCwd,
+          query: plan?.query ?? input.query,
           includeFiles: true,
           includeDirectories: false,
           limit: FILE_SEARCH_LIMIT,
@@ -99,7 +109,7 @@ export function useWorkspaceFileSearch(input: { enabled: boolean; query: string 
         setState({
           sourceKey,
           requestKey,
-          entries: payload.error ? [] : describeFileEntries(payload.entries),
+          entries: payload.error ? [] : describeFileEntries(payload.entries, plan?.root ?? null),
           loading: false,
           error: payload.error ?? null,
         });
