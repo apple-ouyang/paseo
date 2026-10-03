@@ -1685,7 +1685,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly toolCalls = new Map<string, ACPToolSnapshot>();
   private readonly terminalEntries = new Map<string, TerminalEntry>();
   private readonly releasedTerminalResults = new Map<string, TerminalResult>();
-  private readonly pendingReleasedTerminalWrites = new Map<string, Promise<void>>();
+  private readonly releasedTerminalOperations = new Map<string, Promise<void>>();
   private readonly persistedHistory: AgentTimelineItem[] = [];
   private readonly initialHandle?: AgentPersistenceHandle;
 
@@ -3363,25 +3363,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (this.closed) {
       return;
     }
-    const previousWrite = this.pendingReleasedTerminalWrites.get(result.id) ?? Promise.resolve();
-    const write = previousWrite
-      .catch(() => undefined)
-      .then(() => this.writeReleasedTerminalFile(result, create))
-      .then(() => undefined);
-    this.pendingReleasedTerminalWrites.set(result.id, write);
-    void write.then(
-      () => {
-        if (this.pendingReleasedTerminalWrites.get(result.id) === write) {
-          this.pendingReleasedTerminalWrites.delete(result.id);
-        }
-        return undefined;
-      },
-      () => {
-        if (this.pendingReleasedTerminalWrites.get(result.id) === write) {
-          this.pendingReleasedTerminalWrites.delete(result.id);
-        }
-        return undefined;
-      },
+    const write = this.runReleasedTerminalOperation(result.id, () =>
+      this.writeReleasedTerminalFile(result, create),
     );
     try {
       await write;
@@ -3390,6 +3373,30 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         throw error;
       }
     }
+  }
+
+  private runReleasedTerminalOperation(
+    terminalId: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const previous = this.releasedTerminalOperations.get(terminalId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    this.releasedTerminalOperations.set(terminalId, next);
+    void next.then(
+      () => {
+        if (this.releasedTerminalOperations.get(terminalId) === next) {
+          this.releasedTerminalOperations.delete(terminalId);
+        }
+        return undefined;
+      },
+      () => {
+        if (this.releasedTerminalOperations.get(terminalId) === next) {
+          this.releasedTerminalOperations.delete(terminalId);
+        }
+        return undefined;
+      },
+    );
+    return next;
   }
 
   private async writeReleasedTerminalFile(result: TerminalResult, create: boolean): Promise<void> {
@@ -3437,24 +3444,25 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (this.releasedTerminalResults.has(terminalId)) {
       return;
     }
-    await this.pendingReleasedTerminalWrites.get(terminalId)?.catch(() => undefined);
     const cacheDir = this.releasedTerminalCacheDir;
     if (!cacheDir) {
       return;
     }
     const filePath = this.releasedTerminalResultPath(cacheDir, terminalId);
-    try {
-      const raw = await fs.readFile(filePath, "utf8");
-      const parsed = JSON.parse(raw) as Omit<TerminalResult, "id" | "filePath">;
-      this.releasedTerminalResults.set(terminalId, { ...parsed, id: terminalId, filePath });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        this.logger.debug(
-          { err: error, terminalId },
-          "Failed to load released ACP terminal result",
-        );
+    await this.runReleasedTerminalOperation(terminalId, async () => {
+      try {
+        const raw = await fs.readFile(filePath, "utf8");
+        const parsed = JSON.parse(raw) as Omit<TerminalResult, "id" | "filePath">;
+        this.releasedTerminalResults.set(terminalId, { ...parsed, id: terminalId, filePath });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          this.logger.debug(
+            { err: error, terminalId },
+            "Failed to load released ACP terminal result",
+          );
+        }
       }
-    }
+    });
   }
 
   private async cleanupCompletedReleasedTerminalResult(update: SessionUpdate): Promise<void> {
@@ -3475,17 +3483,18 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private async discardReleasedTerminalResult(terminalId: string): Promise<void> {
-    await this.pendingReleasedTerminalWrites.get(terminalId)?.catch(() => undefined);
     this.releasedTerminalResults.delete(terminalId);
     const cacheDir = this.releasedTerminalCacheDir;
     if (cacheDir) {
-      await fs.rm(this.releasedTerminalResultPath(cacheDir, terminalId), { force: true });
+      await this.runReleasedTerminalOperation(terminalId, () =>
+        fs.rm(this.releasedTerminalResultPath(cacheDir, terminalId), { force: true }),
+      );
     }
   }
 
   private async clearReleasedTerminalCache(): Promise<void> {
-    await Promise.allSettled(this.pendingReleasedTerminalWrites.values());
-    this.pendingReleasedTerminalWrites.clear();
+    await Promise.allSettled(this.releasedTerminalOperations.values());
+    this.releasedTerminalOperations.clear();
     this.releasedTerminalResults.clear();
     const cacheDir = this.releasedTerminalCacheDir ?? (await this.releasedTerminalCacheDirPromise);
     if (cacheDir) {
