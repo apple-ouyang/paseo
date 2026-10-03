@@ -626,6 +626,12 @@ interface TerminalEntry {
   rejectExit: (error: Error) => void;
 }
 
+interface TerminalResult {
+  output: string;
+  truncated: boolean;
+  exit: TerminalExit | null;
+}
+
 export interface ConfigOptionSelector {
   id: string;
   label: string;
@@ -1672,6 +1678,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private submittedUserMessageTurnId: string | null = null;
   private readonly toolCalls = new Map<string, ACPToolSnapshot>();
   private readonly terminalEntries = new Map<string, TerminalEntry>();
+  private readonly releasedTerminalResults = new Map<string, TerminalResult>();
   private readonly persistedHistory: AgentTimelineItem[] = [];
   private readonly initialHandle?: AgentPersistenceHandle;
 
@@ -2463,6 +2470,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     );
     await Promise.all(terminalTerminations);
     this.terminalEntries.clear();
+    this.releasedTerminalResults.clear();
 
     if (this.child) {
       await this.terminateProcess(this.child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 });
@@ -2713,6 +2721,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (!entry.exit) {
       await this.terminateProcess(entry.child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 });
     }
+    this.releasedTerminalResults.set(params.terminalId, {
+      output: entry.output,
+      truncated: entry.truncated,
+      exit: entry.exit,
+    });
     this.terminalEntries.delete(params.terminalId);
   }
 
@@ -3051,7 +3064,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       snapshot = this.toolSnapshotTransformer(snapshot);
     }
     this.toolCalls.set(toolCallId, snapshot);
-    return [this.wrapTimeline(mapToolSnapshotToTimeline(snapshot, this.terminalEntries))];
+    return [
+      this.wrapTimeline(
+        mapToolSnapshotToTimeline(snapshot, this.terminalEntries, this.releasedTerminalResults),
+      ),
+    ];
   }
 
   private createMessageTimelineItem(
@@ -3259,7 +3276,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
   private synthesizeCanceledToolCalls(): void {
     for (const snapshot of this.toolCalls.values()) {
-      const mapped = mapToolSnapshotToTimeline(snapshot, this.terminalEntries);
+      const mapped = mapToolSnapshotToTimeline(
+        snapshot,
+        this.terminalEntries,
+        this.releasedTerminalResults,
+      );
       if (mapped.status === "running") {
         this.pushEvent(
           this.wrapTimeline({
@@ -3569,21 +3590,39 @@ function mergeToolSnapshot(
   update: ToolCall | ToolCallUpdate,
   previous?: ACPToolSnapshot,
 ): ACPToolSnapshot {
-  const content = coalesceDefined(update.content, previous?.content, null);
-  const terminalContent = extractTerminalExitContent(update);
   return {
     toolCallId,
     title: update.title ?? previous?.title ?? toolCallId,
     kind: update.kind ?? previous?.kind ?? null,
     status: update.status ?? previous?.status ?? null,
-    content:
-      terminalContent !== undefined && !content?.some((item) => item.type === "terminal")
-        ? [...(content ?? []), terminalContent]
-        : content,
+    content: mergeToolContent(
+      update.content,
+      previous?.content,
+      extractTerminalExitContent(update),
+    ),
     locations: coalesceDefined(update.locations, previous?.locations, null),
     rawInput: update.rawInput !== undefined ? update.rawInput : previous?.rawInput,
     rawOutput: update.rawOutput !== undefined ? update.rawOutput : previous?.rawOutput,
   };
+}
+
+function mergeToolContent(
+  content: ToolCallContent[] | undefined,
+  previousContent: ToolCallContent[] | null | undefined,
+  terminalContent: ToolCallContent | undefined,
+): ToolCallContent[] | null {
+  const mergedContent = coalesceDefined(content, previousContent, null);
+  const previousTerminalContent = previousContent?.find(
+    (item): item is Extract<ToolCallContent, { type: "terminal" }> => item.type === "terminal",
+  );
+  const linkedTerminalContent = terminalContent ?? previousTerminalContent;
+  if (
+    linkedTerminalContent === undefined ||
+    mergedContent?.some((item) => item.type === "terminal")
+  ) {
+    return mergedContent;
+  }
+  return [...(mergedContent ?? []), linkedTerminalContent];
 }
 
 function mapPlanToTimeline(plan: Plan): AgentTimelineItem {
@@ -3599,9 +3638,10 @@ function mapPlanToTimeline(plan: Plan): AgentTimelineItem {
 function mapToolSnapshotToTimeline(
   snapshot: ACPToolSnapshot,
   terminals: Map<string, TerminalEntry>,
+  releasedTerminalResults: Map<string, TerminalResult>,
 ): ToolCallTimelineItem {
   const status = mapToolStatus(snapshot.status);
-  const detail = mapToolDetail(snapshot, terminals);
+  const detail = mapToolDetail(snapshot, terminals, releasedTerminalResults);
   const base = {
     type: "tool_call" as const,
     callId: snapshot.toolCallId,
@@ -3659,13 +3699,14 @@ interface MapToolDetailContext {
 function mapToolDetail(
   snapshot: ACPToolSnapshot,
   terminals: Map<string, TerminalEntry>,
+  releasedTerminalResults: Map<string, TerminalResult>,
 ): ToolCallDetail {
   const context: MapToolDetailContext = {
     snapshot,
     firstLocation: snapshot.locations?.[0]?.path,
     textContent: extractToolText(snapshot.content),
     diffContent: extractDiffContent(snapshot.content),
-    terminalContent: extractTerminalContent(snapshot.content, terminals),
+    terminalContent: extractTerminalContent(snapshot.content, terminals, releasedTerminalResults),
     rawInput: readRecord(snapshot.rawInput),
     rawOutput: readRecord(snapshot.rawOutput),
   };
@@ -3817,6 +3858,7 @@ function extractDiffContent(
 function extractTerminalContent(
   content: ToolCallContent[] | null | undefined,
   terminals: Map<string, TerminalEntry>,
+  releasedTerminalResults: Map<string, TerminalResult>,
 ):
   | {
       command?: string;
@@ -3831,13 +3873,14 @@ function extractTerminalContent(
   if (!terminal) {
     return undefined;
   }
-  const entry = terminals.get(terminal.terminalId);
-  if (!entry) {
+  const result =
+    terminals.get(terminal.terminalId) ?? releasedTerminalResults.get(terminal.terminalId);
+  if (!result) {
     return undefined;
   }
   return {
-    output: entry.output,
-    exitCode: entry.exit?.exitCode ?? null,
+    output: result.output,
+    exitCode: result.exit?.exitCode ?? null,
   };
 }
 
@@ -3864,7 +3907,7 @@ function mapPermissionRequest(
           text: chooserText,
           icon: "wrench",
         }
-      : mapToolDetail(snapshot, new Map()),
+      : mapToolDetail(snapshot, new Map(), new Map()),
     actions: params.options.map((option) => ({
       id: option.optionId,
       label: option.name,

@@ -816,6 +816,10 @@ describe("ACPAgentSession terminal tools", () => {
 });
 
 describe("ACP tool-call detail mapping", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   async function collectToolEvents(provider: string, updates: SessionUpdate[]) {
     const session = createSessionWithConfig({ provider });
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
@@ -933,6 +937,7 @@ describe("ACP tool-call detail mapping", () => {
     child.stdout!.emit("data", "devin-out\n");
     child.emit("exit", 0, null);
     await session.waitForTerminalExit({ sessionId: "session-1", terminalId });
+    await session.releaseTerminal({ sessionId: "session-1", terminalId });
 
     await session.sessionUpdate({
       sessionId: "session-1",
@@ -950,8 +955,17 @@ describe("ACP tool-call detail mapping", () => {
       update: {
         sessionUpdate: "tool_call_update",
         toolCallId: "call-1",
-        status: "completed",
+        status: "in_progress",
         _meta: { terminal_exit: { terminal_id: terminalId, exit_code: 0, signal: null } },
+      } as SessionUpdate,
+    });
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "late update" } }],
       } as SessionUpdate,
     });
 
