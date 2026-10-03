@@ -23,6 +23,8 @@ export interface DaemonFileSearchPlan {
    * path spelled out is the daemon's supported way to resolve a named entry.
    */
   exact: DaemonFileSearchRequest | null;
+  /** The path the user typed, collapsed: the only path `exact` may legitimately return. */
+  namedPath: string;
 }
 
 const TRAILING_SEPARATORS = /\/+$/;
@@ -93,7 +95,7 @@ export function planDaemonFileSearchRequest(input: {
   const browsed = collapsed.replace(TRAILING_SEPARATORS, "");
   if (!browsed || browsed === "~" || TRAILING_SEPARATORS.test(typed)) {
     const root = toDirectoryRoot(browsed);
-    return { list: { cwd: root, query: "", root }, exact: null };
+    return { list: { cwd: root, query: "", root }, exact: null, namedPath: collapsed };
   }
 
   const separator = browsed.lastIndexOf("/");
@@ -106,7 +108,34 @@ export function planDaemonFileSearchRequest(input: {
   return {
     list: { cwd: root, query: name, root },
     exact: { cwd: root, query: `./${name}`, root },
+    namedPath: collapsed,
   };
+}
+
+function pathsEqual(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    const withoutTrailing = value.replace(/\/+$/, "");
+    return /^[A-Za-z]:\//.test(withoutTrailing)
+      ? `${withoutTrailing.slice(0, 1).toUpperCase()}${withoutTrailing.slice(1)}`
+      : withoutTrailing;
+  };
+  return normalize(left) === normalize(right);
+}
+
+/**
+ * True only for the path the user typed. The retrieval request falls back to a suffix search when
+ * the named path does not exist, and that search can offer a same-named file deeper under the root
+ * — opening that instead of the typed path would be wrong, so it is filtered out.
+ */
+export function isNamedFileSuggestion(input: {
+  root: string;
+  path: string;
+  namedPath: string;
+}): boolean {
+  return pathsEqual(
+    resolveSuggestedFilePath({ root: input.root, path: input.path }),
+    input.namedPath,
+  );
 }
 
 /** Rebuilds an openable path from a suggestion the daemon returned relative to `root`. */
