@@ -7,7 +7,11 @@ import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { clearCommandCenterFocusRestoreElement } from "@/utils/command-center-focus-restore";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
-import { planDaemonFileSearchRequest, resolveSuggestedFilePath } from "./file-search-query";
+import {
+  isNamedFileSuggestion,
+  planDaemonFileSearchRequest,
+  resolveSuggestedFilePath,
+} from "./file-search-query";
 import {
   describeWorkspaceFilePath,
   type WorkspaceFileSearchEntry,
@@ -122,19 +126,32 @@ export function useWorkspaceFileSearch(input: { enabled: boolean; query: string 
             : Promise.resolve(null),
         ]);
         if (cancelled) return;
-        const exactEntries = exactPayload?.error
-          ? []
-          : describeFileEntries(exactPayload?.entries ?? [], exactRequest?.root ?? null);
+        // The retrieval request falls back to a suffix search when the typed path does not exist;
+        // only a result that is the typed path may lead the list.
+        const exactRoot = exactRequest?.root ?? null;
+        const namedEntries =
+          exactPayload && !exactPayload.error
+            ? describeFileEntries(
+                exactPayload.entries.filter((entry) =>
+                  isNamedFileSuggestion({
+                    root: exactRoot ?? "",
+                    path: entry.path,
+                    namedPath: plan?.namedPath ?? "",
+                  }),
+                ),
+                exactRoot,
+              )
+            : [];
         const listedEntries = payload.error
           ? []
           : describeFileEntries(payload.entries, plan?.list.root ?? null);
-        const namedPaths = new Set(exactEntries.map((entry) => entry.path));
+        const listedPaths = new Set(listedEntries.map((entry) => entry.path));
         setState({
           sourceKey,
           requestKey,
           entries: [
-            ...exactEntries,
-            ...listedEntries.filter((entry) => !namedPaths.has(entry.path)),
+            ...namedEntries.filter((entry) => !listedPaths.has(entry.path)),
+            ...listedEntries,
           ],
           loading: false,
           error: payload.error ?? null,
