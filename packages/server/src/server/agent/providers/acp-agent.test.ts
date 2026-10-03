@@ -198,6 +198,7 @@ function createSessionWithConfig(
     modeId?: string | null;
     model?: string | null;
     featureValues?: Record<string, unknown>;
+    terminalProcessSpawner?: typeof spawnUtils.spawnProcess;
   } = {},
   logger: ReturnType<typeof createTestLogger> = createTestLogger(),
 ): ACPAgentSession {
@@ -222,6 +223,9 @@ function createSessionWithConfig(
         supportsReasoningStream: true,
         supportsToolInvocations: true,
       },
+      ...(config.terminalProcessSpawner
+        ? { terminalProcessSpawner: config.terminalProcessSpawner }
+        : {}),
     },
   );
 }
@@ -919,8 +923,10 @@ describe("ACP tool-call detail mapping", () => {
 
   test("links devin _meta.terminal_exit to terminal output and exit code", async () => {
     const child = createTerminalChildStub();
-    vi.spyOn(spawnUtils, "spawnProcess").mockReturnValue(child);
-    const session = createSessionWithConfig({ provider: "devin" });
+    const session = createSessionWithConfig({
+      provider: "devin",
+      terminalProcessSpawner: () => child,
+    });
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
     const items: unknown[] = [];
     session.subscribe((event) => {
