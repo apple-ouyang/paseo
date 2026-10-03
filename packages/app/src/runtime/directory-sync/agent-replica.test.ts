@@ -230,6 +230,19 @@ describe("AgentDirectoryReplica", () => {
     });
 
     expect(stopped).toEqual(["agent"]);
+
+    replica.applyDelta({
+      kind: "upsert",
+      agent: { ...payload("running again"), status: "running" },
+      project: entry(payload("project")).project,
+    });
+    replica.applyDelta({
+      kind: "upsert",
+      agent: { ...payload("idle again"), status: "idle" },
+      project: entry(payload("project")).project,
+    });
+
+    expect(stopped).toEqual(["agent", "agent"]);
     store.clearSession(serverId);
   });
 

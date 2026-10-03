@@ -107,7 +107,7 @@ export class AgentDirectoryReplica {
     } else {
       this.members.add(delta.agent.id);
       if (!before) this.advance(delta.agent.id);
-      if (result.agent?.turn.phase === "open") {
+      if (result.startedRunning || result.agent?.turn.phase === "open") {
         this.stoppedRunningAgents.delete(result.agent.id);
       }
     }
