@@ -11,6 +11,7 @@ import {
   mergePendingTabLabels,
   moveWorkspaceTab,
   parseTabOrderLabel,
+  decideSyncedClose,
   pendingTabLabelsSatisfied,
   planTabOrderEnforcement,
   planTabWorkspaceEnforcement,
@@ -331,6 +332,71 @@ describe("buildTabClosedLabels", () => {
       [TAB_ORDER_LABEL]: "000002",
       [TAB_CLOSED_LABEL]: "1",
     });
+  });
+});
+
+describe("decideSyncedClose", () => {
+  const base = {
+    tombstone: false,
+    storedTombstone: false,
+    archived: false,
+    pendingClosed: null as boolean | null,
+    pinned: false,
+    justUnarchived: false,
+    tabOpen: false,
+  };
+
+  it("closes an archived agent nobody explicitly opened", () => {
+    expect(decideSyncedClose({ ...base, archived: true })).toEqual({
+      closed: true,
+      clearTombstone: false,
+    });
+  });
+
+  it("keeps an archived agent that is pinned or just opened", () => {
+    expect(decideSyncedClose({ ...base, archived: true, pinned: true, tabOpen: true })).toEqual({
+      closed: false,
+      clearTombstone: false,
+    });
+    expect(decideSyncedClose({ ...base, archived: true, pendingClosed: false })).toEqual({
+      closed: false,
+      clearTombstone: false,
+    });
+  });
+
+  it("lets a user close beat a leftover pin", () => {
+    expect(
+      decideSyncedClose({ ...base, pendingClosed: true, pinned: true, tabOpen: true }),
+    ).toEqual({ closed: true, clearTombstone: false });
+    expect(decideSyncedClose({ ...base, tombstone: true, pinned: true, tabOpen: true })).toEqual({
+      closed: true,
+      clearTombstone: false,
+    });
+  });
+
+  it("clears a stale tombstone when unarchive happens on an open tab", () => {
+    expect(
+      decideSyncedClose({
+        ...base,
+        tombstone: true,
+        storedTombstone: true,
+        justUnarchived: true,
+        tabOpen: true,
+        pinned: true,
+      }),
+    ).toEqual({ closed: false, clearTombstone: true });
+  });
+
+  it("does not pop a closed tab open on another client when unarchive arrives", () => {
+    expect(
+      decideSyncedClose({
+        ...base,
+        tombstone: true,
+        storedTombstone: true,
+        justUnarchived: true,
+        tabOpen: false,
+      }),
+    ).toEqual({ closed: true, clearTombstone: false });
   });
 });
 

@@ -7,6 +7,7 @@ import { buildDeterministicWorkspaceTabId } from "@/workspace-tabs/identity";
 import {
   buildTabClosedLabels,
   buildTabWorkspaceLabels,
+  decideSyncedClose,
   formatTabOrderLabel,
   mergePendingTabLabels,
   moveWorkspaceTab,
@@ -31,8 +32,8 @@ import {
  *   wrapped so opening an agent tab writes its placement and clears the close
  *   tombstone, while closing one writes the tombstone.
  * - Remote intent lands in the session store through `agent_state` broadcasts:
- *   a subscription diffs the three sync labels per agent and applies
- *   convergent changes the moment they arrive — no polling on the hot path.
+ *   a subscription diffs the three sync labels and `archivedAt` per agent and
+ *   applies convergent changes the moment they arrive — no polling on the hot path.
  * - Local layout changes publish the order labels through a debounced layout
  *   subscription.
  * - A slow sweep (30s) remains only as a backstop for lazily mounted layouts,
@@ -221,13 +222,81 @@ function findAgentTabCopies(
   return { workspaceKeysWithTab, tabIdByWorkspaceKey };
 }
 
+function pendingClosedValue(serverId: string, agentId: string): boolean | null {
+  const pending = pendingLabels.get(pendingKey(serverId, agentId))?.closed;
+  if (!pending || Date.now() - pending.at > PENDING_LABEL_TTL_MS) {
+    return null;
+  }
+  return pending.value;
+}
+
+function agentIsPinned(serverId: string, agentId: string): boolean {
+  const prefix = `${serverId}:`;
+  for (const [workspaceKey, agentIds] of Object.entries(
+    activeWorkspaceLayoutStore.getState().pinnedAgentIdsByWorkspace,
+  )) {
+    if (workspaceKey.startsWith(prefix) && agentIds.has(agentId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Previous archived bit, so unarchive is a transition and not a steady state. */
+const lastArchived = new Map<string, boolean>();
+
+function takeJustUnarchived(serverId: string, agentId: string, archived: boolean): boolean {
+  const key = pendingKey(serverId, agentId);
+  const seen = lastArchived.has(key);
+  const wasArchived = lastArchived.get(key) === true;
+  lastArchived.set(key, archived);
+  return seen && wasArchived && !archived;
+}
+
+function clearStaleCloseTombstone(
+  serverId: string,
+  agentId: string,
+  workspaceId: string | undefined,
+  stored: Record<string, string> | null,
+): void {
+  markPending(serverId, agentId, { closed: false });
+  // Spread of `Record | null` narrows to the one written key. Keep a string
+  // index so the workspace label can be restored on the same write.
+  const cleared: Record<string, string> = {
+    ...stored,
+    [TAB_CLOSED_LABEL]: "",
+  };
+  if (workspaceId) {
+    cleared[TAB_WORKSPACE_LABEL] = workspaceId;
+  }
+  writeAgentLabels(serverId, agentId, cleared);
+}
+
 function enforceSyncedAgent(serverId: string, agentId: string, agent?: Agent): void {
   const labels = effectiveLabels(serverId, agentId);
-  const workspaceId = labels[TAB_WORKSPACE_LABEL];
-  // Archiving must win over a stale placement label: an archived agent's
-  // moved tab would otherwise be pinned-open forever and reopened here.
-  const closed = Boolean(labels[TAB_CLOSED_LABEL]) || Boolean(agent?.archivedAt);
-  if ((!workspaceId || typeof workspaceId !== "string") && !closed) {
+  const workspaceId =
+    typeof labels[TAB_WORKSPACE_LABEL] === "string" ? labels[TAB_WORKSPACE_LABEL] : "";
+  const stored = agentLabelsFor(serverId, agentId);
+  const { workspaceKeysWithTab, tabIdByWorkspaceKey } = findAgentTabCopies(serverId, agentId);
+  const archived = Boolean(agent?.archivedAt);
+  // Archive still beats a stale placement label (don't resurrect a moved tab).
+  // An explicit open — the history restore pin, or a close=false write still
+  // in flight — wins over archivedAt. Unarchive of a tab that is already open
+  // clears a stale tombstone instead of closing it.
+  const decision = decideSyncedClose({
+    tombstone: Boolean(labels[TAB_CLOSED_LABEL]),
+    storedTombstone: Boolean(stored?.[TAB_CLOSED_LABEL]),
+    archived,
+    pendingClosed: pendingClosedValue(serverId, agentId),
+    pinned: agentIsPinned(serverId, agentId),
+    justUnarchived: takeJustUnarchived(serverId, agentId, archived),
+    tabOpen: workspaceKeysWithTab.length > 0,
+  });
+  const closed = decision.closed;
+  if (decision.clearTombstone) {
+    clearStaleCloseTombstone(serverId, agentId, workspaceId, stored);
+  }
+  if (!workspaceId && !closed) {
     return;
   }
   const targetWorkspaceKey = workspaceId
@@ -236,18 +305,22 @@ function enforceSyncedAgent(serverId: string, agentId: string, agent?: Agent): v
   if (!targetWorkspaceKey && !closed) {
     return;
   }
-  const { workspaceKeysWithTab, tabIdByWorkspaceKey } = findAgentTabCopies(serverId, agentId);
   const plan = planTabWorkspaceEnforcement({
     targetWorkspaceKey,
     workspaceKeysWithTab,
     closed,
   });
-  if (plan.closeIn.length === 0 && !plan.ensureIn) {
+  if (plan.closeIn.length === 0 && !plan.ensureIn && closed) {
     return;
   }
   const store = activeWorkspaceLayoutStore.getState();
   internalSync = true;
   try {
+    if (!closed) {
+      for (const workspaceKey of workspaceKeysWithTab) {
+        store.unhideAgent(workspaceKey, agentId);
+      }
+    }
     for (const workspaceKey of plan.closeIn) {
       const tabId = tabIdByWorkspaceKey.get(workspaceKey);
       store.unpinAgent(workspaceKey, agentId);
@@ -595,11 +668,15 @@ function installStoreHooks(): void {
   }
 }
 
-function syncLabelSignature(labels: Record<string, string> | null | undefined): string {
+function syncLabelSignature(
+  labels: Record<string, string> | null | undefined,
+  archived: boolean,
+): string {
   return [
     labels?.[TAB_WORKSPACE_LABEL] ?? "",
     labels?.[TAB_ORDER_LABEL] ?? "",
     labels?.[TAB_CLOSED_LABEL] ?? "",
+    archived ? "1" : "0",
   ].join("|");
 }
 
@@ -607,8 +684,8 @@ function syncLabelSignature(labels: Record<string, string> | null | undefined): 
  * Remote label writes land in the session store through `agent_state`
  * broadcasts, so a subscription applies moves/closes/orders the moment the
  * echo arrives. The per-agent signature diff keeps streaming churn cheap:
- * state updates that do not touch the three sync labels never reach the
- * enforcers.
+ * state updates that do not touch the three sync labels or `archivedAt`
+ * never reach the enforcers.
  */
 const lastSyncLabelSignature = new Map<string, string>();
 
@@ -624,7 +701,7 @@ function installSessionWatch(): void {
         for (const serverId of Object.keys(sessions)) {
           eachSessionAgent(serverId, (agentId, agent) => {
             const key = pendingKey(serverId, agentId);
-            const signature = syncLabelSignature(agent.labels);
+            const signature = syncLabelSignature(agent.labels, Boolean(agent.archivedAt));
             if (lastSyncLabelSignature.get(key) !== signature) {
               lastSyncLabelSignature.set(key, signature);
               changed = true;

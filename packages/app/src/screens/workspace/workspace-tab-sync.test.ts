@@ -79,6 +79,13 @@ function agentTabIdsIn(workspaceId: string): string[] {
   );
 }
 
+function replaceAgent(agent: Agent): void {
+  const agents = useSessionStore.getState().sessions[SERVER]?.agents ?? new Map<string, Agent>();
+  const next = new Map(agents);
+  next.set(agent.id, agent);
+  useSessionStore.getState().setAgents(SERVER, next);
+}
+
 function setAgentLabels(agentId: string, labels: Record<string, string>): void {
   const agents = useSessionStore.getState().sessions[SERVER]?.agents;
   if (!agents?.has(agentId)) {
@@ -238,5 +245,68 @@ describe("workspace tab sync", () => {
     });
     expect(agentTabIdsIn("ws-b")).toEqual(["agent-1"]);
     expect(agentTabIdsIn("ws-a")).toEqual([]);
+  });
+
+  it("keeps a history-opened archived agent tab open", () => {
+    replaceAgent({
+      ...makeAgent("agent-1"),
+      archivedAt: new Date("2026-04-02T00:00:00.000Z"),
+    });
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    expect(agentTabIdsIn("ws-a")).toEqual(["agent-1"]);
+    const hidden = layoutStore.getState().hiddenAgentIdsByWorkspace[workspaceKey("ws-a")];
+    expect(hidden?.has("agent-1") ?? false).toBe(false);
+  });
+
+  it("does not reopen an archived agent tab the user did not keep open", () => {
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    layoutStore.getState().unpinAgent(workspaceKey("ws-a"), "agent-1");
+    vi.advanceTimersByTime(16_000);
+    replaceAgent({
+      ...makeAgent("agent-1", {
+        [TAB_WORKSPACE_LABEL]: "ws-a",
+        [TAB_CLOSED_LABEL]: "",
+      }),
+      archivedAt: new Date("2026-04-02T00:00:00.000Z"),
+    });
+    expect(agentTabIdsIn("ws-a")).toEqual([]);
+  });
+
+  it("keeps the open tab when unarchive arrives with a stale close tombstone", () => {
+    replaceAgent({
+      ...makeAgent("agent-1"),
+      archivedAt: new Date("2026-04-02T00:00:00.000Z"),
+    });
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    updateAgent.mockClear();
+    replaceAgent({
+      ...makeAgent("agent-1", {
+        [TAB_WORKSPACE_LABEL]: "ws-a",
+        [TAB_CLOSED_LABEL]: "1",
+      }),
+      archivedAt: null,
+    });
+    expect(agentTabIdsIn("ws-a")).toEqual(["agent-1"]);
+    expect(updateAgent).toHaveBeenCalledWith(
+      "agent-1",
+      expect.objectContaining({
+        labels: expect.objectContaining({ [TAB_CLOSED_LABEL]: "" }),
+      }),
+    );
   });
 });
