@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { gotoWorkspace, pressNewTabShortcut } from "./launcher";
+import { seedWorkspace } from "./seed-client";
 import { panWorkspaceTabsWithWheel } from "./workspace-tabs";
 
 const OVERFLOWING_TABS_VIEWPORT = { width: 760, height: 800 };
@@ -15,4 +16,12 @@ export async function openOverflowingWorkspaceTabs(page: Page, workspaceId: stri
   }
 }
 
-export { panWorkspaceTabsWithWheel };
+export async function exerciseWorkspaceTabsWheelScroll(page: Page): Promise<void> {
+  const workspace = await seedWorkspace({ repoPrefix: "workspace-tabs-wheel-" });
+  try {
+    await openOverflowingWorkspaceTabs(page, workspace.workspaceId);
+    await panWorkspaceTabsWithWheel(page);
+  } finally {
+    await workspace.cleanup();
+  }
+}
