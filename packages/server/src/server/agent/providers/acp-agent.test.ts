@@ -195,6 +195,8 @@ function createSessionWithConfig(
     model?: string | null;
     featureValues?: Record<string, unknown>;
     terminalProcessSpawner?: typeof spawnUtils.spawnProcess;
+    agentProcessSpawner?: () => Promise<SpawnedACPProcess>;
+    terminateProcess?: ProcessTerminator;
   } = {},
   logger: ReturnType<typeof createTestLogger> = createTestLogger(),
 ): ACPAgentSession {
@@ -222,8 +224,33 @@ function createSessionWithConfig(
       ...(config.terminalProcessSpawner
         ? { terminalProcessSpawner: config.terminalProcessSpawner }
         : {}),
+      ...(config.agentProcessSpawner ? { agentProcessSpawner: config.agentProcessSpawner } : {}),
+      ...(config.terminateProcess ? { terminateProcess: config.terminateProcess } : {}),
     },
   );
+}
+
+async function createInitializedSession(
+  config: {
+    provider?: string;
+    terminalProcessSpawner?: typeof spawnUtils.spawnProcess;
+  } = {},
+): Promise<ACPAgentSession> {
+  const mainChild = createProbeChildStub();
+  const session = createSessionWithConfig({
+    ...config,
+    agentProcessSpawner: async () => ({
+      child: mainChild,
+      connection: {
+        newSession: vi.fn().mockResolvedValue({ sessionId: "session-1", configOptions: [] }),
+        unstable_closeSession: vi.fn().mockResolvedValue({}),
+      } as unknown as ClientSideConnection,
+      initialize: { agentCapabilities: { sessionCapabilities: { close: {} } } },
+    }),
+    terminateProcess: async () => "terminated",
+  });
+  await session.initializeNewSession();
+  return session;
 }
 
 test("ACP usage reference uses the provider ID", async () => {
@@ -825,8 +852,7 @@ describe("ACP tool-call detail mapping", () => {
   });
 
   async function collectToolEvents(provider: string, updates: SessionUpdate[]) {
-    const session = createSessionWithConfig({ provider });
-    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    const session = await createInitializedSession({ provider });
     const items: unknown[] = [];
     session.subscribe((event) => {
       if (event.type === "timeline" && event.item.type === "tool_call") items.push(event.item);
@@ -926,11 +952,10 @@ describe("ACP tool-call detail mapping", () => {
 
   test("links devin _meta.terminal_exit to terminal output and exit code", async () => {
     const child = createTerminalChildStub();
-    const session = createSessionWithConfig({
+    const session = await createInitializedSession({
       provider: "devin",
       terminalProcessSpawner: () => child,
     });
-    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
     const items: unknown[] = [];
     session.subscribe((event) => {
       if (event.type === "timeline" && event.item.type === "tool_call") items.push(event.item);
@@ -987,30 +1012,30 @@ describe("ACP tool-call detail mapping", () => {
       },
     });
 
-    await session.close();
-    child.stdout!.emit("data", "late-after-close\n");
+    let finishUnhandledRejectionWait!: () => void;
     const unhandledRejection = new Promise<unknown>((resolve) => {
       const handler = (reason: unknown) => {
         process.off("unhandledRejection", handler);
         resolve(reason);
       };
       process.once("unhandledRejection", handler);
-      setImmediate(() => {
+      finishUnhandledRejectionWait = () => {
         process.off("unhandledRejection", handler);
         resolve(undefined);
-      });
+      };
     });
+    await session.close();
+    child.stdout!.emit("data", "late-after-close\n");
+    setImmediate(finishUnhandledRejectionWait);
     await expect(unhandledRejection).resolves.toBeUndefined();
   });
 
   test("cleans released terminal results after failed tool calls", async () => {
     const child = createTerminalChildStub();
-    const session = createSessionWithConfig({
+    const session = await createInitializedSession({
       provider: "devin",
       terminalProcessSpawner: () => child,
     });
-    const internals = asInternals<ACPSessionInternals>(session);
-    internals.sessionId = "session-1";
     const items: unknown[] = [];
     session.subscribe((event) => {
       if (event.type === "timeline" && event.item.type === "tool_call") items.push(event.item);

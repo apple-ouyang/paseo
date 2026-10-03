@@ -492,6 +492,7 @@ interface ACPAgentSessionOptions {
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
   terminalProcessSpawner?: typeof spawnProcess;
+  agentProcessSpawner?: () => Promise<SpawnedACPProcess>;
 }
 
 export interface SpawnedACPProcess {
@@ -1710,6 +1711,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private initialCommandsWaitTimeoutMs: number;
   private readonly extensionCommandsParser?: ACPExtensionCommandsParser;
   private readonly terminalProcessSpawner?: typeof spawnProcess;
+  private readonly agentProcessSpawner?: () => Promise<SpawnedACPProcess>;
   private currentTurnUsage: AgentUsage | undefined;
   private activeForegroundTurnId: string | null = null;
   private fallbackAssistantMessageId: string | null = null;
@@ -1753,6 +1755,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
     this.terminalProcessSpawner = options.terminalProcessSpawner;
+    this.agentProcessSpawner = options.agentProcessSpawner;
   }
 
   get id(): string | null {
@@ -2768,6 +2771,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private async spawnProcess(): Promise<SpawnedACPProcess> {
+    if (this.agentProcessSpawner) {
+      return this.agentProcessSpawner();
+    }
     const prefix = await resolveProviderLaunch({
       commandConfig: this.runtimeSettings?.command,
       defaultBinary: this.defaultCommand[0],
