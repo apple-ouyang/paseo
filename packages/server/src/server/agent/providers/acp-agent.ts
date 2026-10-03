@@ -3024,7 +3024,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
           name: command.name,
           description: command.description,
           argumentHint: "",
-          kind: "command",
+          // Inline `/` completion only offers `kind: "skill"`. ACP providers
+          // that do not tag their skills must remain discoverable there, while
+          // explicitly tagged native commands should stay out of it.
+          kind:
+            (command._meta as { kind?: unknown } | null | undefined)?.kind === "command"
+              ? "command"
+              : "skill",
         }));
         this.settleCommandsReady();
         return pendingUserEvents;

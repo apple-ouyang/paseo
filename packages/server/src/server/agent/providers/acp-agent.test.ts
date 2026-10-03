@@ -2501,10 +2501,16 @@ describe("ACPAgentSession slash commands", () => {
         {
           name: "research_codebase",
           description: "Search the workspace for relevant files",
+          _meta: { kind: "skill" },
         },
         {
           name: "create_plan",
           description: "Draft a plan for the requested work",
+        },
+        {
+          name: "compact",
+          description: "Compact the conversation",
+          _meta: { kind: "command" },
         },
       ],
     });
@@ -2514,11 +2520,17 @@ describe("ACPAgentSession slash commands", () => {
         name: "research_codebase",
         description: "Search the workspace for relevant files",
         argumentHint: "",
-        kind: "command",
+        kind: "skill",
       },
       {
         name: "create_plan",
         description: "Draft a plan for the requested work",
+        argumentHint: "",
+        kind: "skill",
+      },
+      {
+        name: "compact",
+        description: "Compact the conversation",
         argumentHint: "",
         kind: "command",
       },
@@ -2529,11 +2541,17 @@ describe("ACPAgentSession slash commands", () => {
         name: "research_codebase",
         description: "Search the workspace for relevant files",
         argumentHint: "",
-        kind: "command",
+        kind: "skill",
       },
       {
         name: "create_plan",
         description: "Draft a plan for the requested work",
+        argumentHint: "",
+        kind: "skill",
+      },
+      {
+        name: "compact",
+        description: "Compact the conversation",
         argumentHint: "",
         kind: "command",
       },
