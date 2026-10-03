@@ -1,19 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-// Same storage mock the neighboring store tests use (workspace-layout-store
-// .test.ts, explorer-sidebar.test.ts, ...): the app persists layouts through
-// AsyncStorage, which has no Node build.
-vi.mock("@react-native-async-storage/async-storage", () => ({
-  default: {
-    getItem: vi.fn(async () => null),
-    setItem: vi.fn(async () => undefined),
-    removeItem: vi.fn(async () => undefined),
-  },
-}));
+import type { StateStorage } from "zustand/middleware";
 
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useSessionStore, type Agent } from "@/stores/session-store";
-import { collectAllTabs, useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
+import { collectAllTabs, createWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import {
   moveAgentTabToWorkspace,
   setWorkspaceTabSyncClientResolver,
@@ -26,6 +16,21 @@ import {
 } from "@/screens/workspace/workspace-tab-move";
 
 const SERVER = "srv-a";
+
+function createMemoryStorage(): StateStorage {
+  const values = new Map<string, string>();
+  return {
+    getItem: async (name) => values.get(name) ?? null,
+    setItem: async (name, value) => {
+      values.set(name, value);
+    },
+    removeItem: async (name) => {
+      values.delete(name);
+    },
+  };
+}
+
+const layoutStore = createWorkspaceLayoutStore(undefined, createMemoryStorage());
 
 function makeAgent(id: string, labels: Record<string, string> = {}): Agent {
   return {
@@ -64,7 +69,7 @@ function workspaceKey(workspaceId: string): string {
 }
 
 function tabsIn(workspaceId: string) {
-  const layout = useWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey(workspaceId)];
+  const layout = layoutStore.getState().layoutByWorkspace[workspaceKey(workspaceId)];
   return layout ? collectAllTabs(layout.root) : [];
 }
 
@@ -107,7 +112,7 @@ describe("workspace tab sync", () => {
         : null,
     );
     useSessionStore.setState((state) => ({ ...state, sessions: {} }));
-    useWorkspaceLayoutStore.setState({
+    layoutStore.setState({
       layoutByWorkspace: {},
       splitSizesByWorkspace: {},
       explorerSidebarWidthByWorkspace: {},
@@ -119,7 +124,7 @@ describe("workspace tab sync", () => {
     });
     useSessionStore.getState().initializeSession(SERVER, {} as DaemonClient);
     useSessionStore.getState().setAgents(SERVER, new Map([["agent-1", makeAgent("agent-1")]]));
-    startWorkspaceTabSync();
+    startWorkspaceTabSync({ layoutStore });
   });
 
   afterEach(() => {
@@ -128,7 +133,7 @@ describe("workspace tab sync", () => {
   });
 
   it("writes the placement label the moment a user opens an agent tab", () => {
-    useWorkspaceLayoutStore.getState().openTab({
+    layoutStore.getState().openTab({
       workspaceKey: workspaceKey("ws-a"),
       target: { kind: "agent", agentId: "agent-1" },
       intent: "reveal",
@@ -146,14 +151,14 @@ describe("workspace tab sync", () => {
   });
 
   it("writes the closed tombstone when a user closes an agent tab", () => {
-    const tabId = useWorkspaceLayoutStore.getState().openTab({
+    const tabId = layoutStore.getState().openTab({
       workspaceKey: workspaceKey("ws-a"),
       target: { kind: "agent", agentId: "agent-1" },
       intent: "reveal",
       pin: true,
     });
     updateAgent.mockClear();
-    useWorkspaceLayoutStore.getState().closeTab(workspaceKey("ws-a"), tabId!);
+    layoutStore.getState().closeTab(workspaceKey("ws-a"), tabId!);
     expect(updateAgent).toHaveBeenCalledWith(
       "agent-1",
       expect.objectContaining({
@@ -163,7 +168,7 @@ describe("workspace tab sync", () => {
   });
 
   it("moves the tab when a remote workspace label lands", () => {
-    useWorkspaceLayoutStore.getState().openTab({
+    layoutStore.getState().openTab({
       workspaceKey: workspaceKey("ws-a"),
       target: { kind: "agent", agentId: "agent-1" },
       intent: "reveal",
@@ -180,7 +185,7 @@ describe("workspace tab sync", () => {
   });
 
   it("closes the tab everywhere when a remote tombstone lands", () => {
-    useWorkspaceLayoutStore.getState().openTab({
+    layoutStore.getState().openTab({
       workspaceKey: workspaceKey("ws-a"),
       target: { kind: "agent", agentId: "agent-1" },
       intent: "reveal",
@@ -194,7 +199,7 @@ describe("workspace tab sync", () => {
   });
 
   it("keeps a moved tab in the target while its order write is in flight", () => {
-    useWorkspaceLayoutStore.getState().openTab({
+    layoutStore.getState().openTab({
       workspaceKey: workspaceKey("ws-a"),
       target: { kind: "agent", agentId: "agent-1" },
       intent: "reveal",
@@ -224,7 +229,7 @@ describe("workspace tab sync", () => {
     // the workspace intent. Then a concurrent remote order write (still
     // carrying the stale ws-a) lands and kicks a reconcile — without the
     // merged pending record this snaps the tab back to ws-a.
-    useWorkspaceLayoutStore.setState({} as never);
+    layoutStore.setState({} as never);
     vi.advanceTimersByTime(200);
     setAgentLabels("agent-1", {
       [TAB_WORKSPACE_LABEL]: "ws-a",

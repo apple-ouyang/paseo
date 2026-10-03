@@ -63,6 +63,9 @@ interface PendingTabLabelWrite {
 let internalSync = false;
 const pendingLabels = new Map<string, PendingTabLabelWrite>();
 
+type WorkspaceLayoutStoreApi = typeof useWorkspaceLayoutStore;
+let activeWorkspaceLayoutStore: WorkspaceLayoutStoreApi = useWorkspaceLayoutStore;
+
 function pendingKey(serverId: string, agentId: string): string {
   return `${serverId}:${agentId}`;
 }
@@ -172,7 +175,7 @@ function workspaceIdFromKey(workspaceKey: string): string {
 }
 
 function findAgentTab(workspaceKey: string, tabId: string) {
-  const layout = useWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+  const layout = activeWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
   if (!layout) {
     return null;
   }
@@ -203,7 +206,7 @@ function findAgentTabCopies(
 ): { workspaceKeysWithTab: string[]; tabIdByWorkspaceKey: Map<string, string> } {
   const workspaceKeysWithTab: string[] = [];
   const tabIdByWorkspaceKey = new Map<string, string>();
-  const layoutState = useWorkspaceLayoutStore.getState();
+  const layoutState = activeWorkspaceLayoutStore.getState();
   for (const [workspaceKey, layout] of Object.entries(layoutState.layoutByWorkspace ?? {})) {
     if (!workspaceKey.startsWith(`${serverId}:`)) {
       continue;
@@ -242,7 +245,7 @@ function enforceSyncedAgent(serverId: string, agentId: string, agent?: Agent): v
   if (plan.closeIn.length === 0 && !plan.ensureIn) {
     return;
   }
-  const store = useWorkspaceLayoutStore.getState();
+  const store = activeWorkspaceLayoutStore.getState();
   internalSync = true;
   try {
     for (const workspaceKey of plan.closeIn) {
@@ -288,7 +291,7 @@ function enforceSyncedTabs(): void {
  */
 function enforceTabOrder(): void {
   try {
-    const layoutState = useWorkspaceLayoutStore.getState();
+    const layoutState = activeWorkspaceLayoutStore.getState();
     for (const [workspaceKey, layout] of Object.entries(layoutState.layoutByWorkspace ?? {})) {
       const serverId = workspaceKey.slice(0, workspaceKey.indexOf(":"));
       const tabsById = new Map(collectAllTabs(layout.root).map((tab) => [tab.tabId, tab]));
@@ -323,7 +326,7 @@ function enforceTabOrder(): void {
         });
         internalSync = true;
         try {
-          useWorkspaceLayoutStore.getState().reorderTabsInPane(workspaceKey, pane.id, next);
+          activeWorkspaceLayoutStore.getState().reorderTabsInPane(workspaceKey, pane.id, next);
         } finally {
           internalSync = false;
         }
@@ -372,7 +375,7 @@ function broadcastServerTabs(serverId: string, publishLocal: boolean): void {
     ...(session?.agentDetails?.entries() ?? []),
     ...(session?.agents?.entries() ?? []),
   ]);
-  const layoutState = useWorkspaceLayoutStore.getState();
+  const layoutState = activeWorkspaceLayoutStore.getState();
   for (const [workspaceKey, layout] of Object.entries(layoutState.layoutByWorkspace ?? {})) {
     if (!workspaceKey.startsWith(`${serverId}:`)) {
       continue;
@@ -429,7 +432,7 @@ export function moveAgentTabToWorkspace(input: {
   agentId: string;
   tabId: string;
 }): boolean {
-  const store = useWorkspaceLayoutStore.getState();
+  const store = activeWorkspaceLayoutStore.getState();
   let moved = false;
   internalSync = true;
   try {
@@ -480,7 +483,7 @@ export function findAgentTabByTestIdentity(
     return null;
   }
   const matches: { workspaceKey: string; tabId: string; agentId: string }[] = [];
-  const layoutState = useWorkspaceLayoutStore.getState();
+  const layoutState = activeWorkspaceLayoutStore.getState();
   for (const [workspaceKey, layout] of Object.entries(layoutState.layoutByWorkspace ?? {})) {
     for (const tab of collectAllTabs(layout.root)) {
       if (tab.target.kind !== "agent") {
@@ -505,7 +508,7 @@ export function findAgentTabByTestIdentity(
 
 /** Locate which workspace layout currently hosts an agent tab. */
 export function findAgentTabWorkspaceKey(agentId: string): string | null {
-  const layoutState = useWorkspaceLayoutStore.getState();
+  const layoutState = activeWorkspaceLayoutStore.getState();
   for (const [workspaceKey, layout] of Object.entries(layoutState.layoutByWorkspace ?? {})) {
     if (
       collectAllTabs(layout.root).some(
@@ -534,10 +537,10 @@ function installStoreHooks(): void {
     return;
   }
   try {
-    const state = useWorkspaceLayoutStore.getState();
+    const state = activeWorkspaceLayoutStore.getState();
     const originalOpenTab = state.openTab;
     const originalCloseTab = state.closeTab;
-    useWorkspaceLayoutStore.setState({
+    activeWorkspaceLayoutStore.setState({
       openTab(input) {
         const result = originalOpenTab.call(this, input);
         try {
@@ -656,7 +659,7 @@ function installLayoutWatch(): void {
     return;
   }
   try {
-    useWorkspaceLayoutStore.subscribe(() => {
+    activeWorkspaceLayoutStore.subscribe(() => {
       try {
         if (internalSync || layoutPublishTimer) {
           return;
@@ -684,10 +687,13 @@ function installLayoutWatch(): void {
  * Install the gesture hooks and event-driven watches, then keep a slow sweep
  * as the backstop for lazily mounted layouts and missed edges. Idempotent.
  */
-export function startWorkspaceTabSync(): void {
+export function startWorkspaceTabSync(
+  options: { layoutStore?: WorkspaceLayoutStoreApi } = {},
+): void {
   if (sweepStarted) {
     return;
   }
+  activeWorkspaceLayoutStore = options.layoutStore ?? useWorkspaceLayoutStore;
   sweepStarted = true;
   const sweep = () => {
     installStoreHooks();
