@@ -2605,6 +2605,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       availableModels: this.availableModels ? [...this.availableModels] : null,
       currentModel: this.currentModel,
       thinkingOptionId: this.thinkingOptionId,
+      currentTitle: this.currentTitle,
+      lastActivityAt: this.lastActivityAt,
+      cachedCommands: [...this.cachedCommands],
+      commandsReadyDeferred: this.commandsReadyDeferred,
+      commandsReadySettled: this.commandsReadySettled,
     };
     try {
       this.rebindConversationSession(forkSessionId);
@@ -2628,6 +2633,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       this.availableModels = previousState.availableModels;
       this.currentModel = previousState.currentModel;
       this.thinkingOptionId = previousState.thinkingOptionId;
+      this.currentTitle = previousState.currentTitle;
+      this.lastActivityAt = previousState.lastActivityAt;
+      this.cachedCommands = previousState.cachedCommands;
+      this.commandsReadyDeferred = previousState.commandsReadyDeferred;
+      this.commandsReadySettled = previousState.commandsReadySettled;
       throw error;
     }
   }
