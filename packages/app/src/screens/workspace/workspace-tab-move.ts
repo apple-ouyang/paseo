@@ -168,6 +168,43 @@ export function planTabOrderEnforcement(input: {
 }
 
 /**
+ * Whether the enforcer should close this agent's tabs.
+ *
+ * A user close (`pendingClosed === true`, or a tombstone with no newer open)
+ * always wins. A user open (`pendingClosed === false`) and the official pin
+ * keep an archived agent visible — history restore opens with `pin: true`
+ * while `archivedAt` is still set. Unarchive while that tab is open clears a
+ * stale tombstone instead of closing. An archived agent nobody explicitly
+ * opened stays closed, so a placement label cannot resurrect it.
+ */
+export function decideSyncedClose(input: {
+  tombstone: boolean;
+  storedTombstone: boolean;
+  archived: boolean;
+  pendingClosed: boolean | null;
+  pinned: boolean;
+  justUnarchived: boolean;
+  tabOpen: boolean;
+}): { closed: boolean; clearTombstone: boolean } {
+  if (input.pendingClosed === true) {
+    return { closed: true, clearTombstone: false };
+  }
+  if (input.justUnarchived && input.tabOpen) {
+    return { closed: false, clearTombstone: input.storedTombstone };
+  }
+  if (input.pendingClosed === false) {
+    return { closed: false, clearTombstone: false };
+  }
+  if (input.tombstone) {
+    return { closed: true, clearTombstone: false };
+  }
+  if (input.archived && !input.pinned) {
+    return { closed: true, clearTombstone: false };
+  }
+  return { closed: false, clearTombstone: false };
+}
+
+/**
  * Enforcement plan for the synced label: a closed tombstone wins over any
  * placement label (close the tab everywhere); otherwise close the agent tab
  * everywhere except the labeled target, and open it in the target when it is
