@@ -2,7 +2,7 @@ import { ACPProviderOptionsSchema } from "./acp-options.js";
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 
@@ -132,7 +132,6 @@ import { withTimeout } from "../../../utils/promise-timeout.js";
 
 const ACP_AUTO_ACCEPT_FEATURE_ID = "auto_accept";
 const MAX_RELEASED_TERMINAL_OUTPUT_BYTES = 1024 * 1024;
-const RELEASED_TERMINAL_RESULT_TTL_MS = 5 * 60 * 1000;
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -657,13 +656,15 @@ interface TerminalEntry {
   resolveExit: (exit: TerminalExit) => void;
   rejectExit: (error: Error) => void;
   releasedResult?: TerminalResult;
+  persistReleasedResult?: () => void;
 }
 
 interface TerminalResult {
+  id: string;
   output: string;
   truncated: boolean;
   exit: TerminalExit | null;
-  releasedAt: number;
+  filePath: string;
 }
 
 export interface ConfigOptionSelector {
@@ -1733,6 +1734,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly toolCalls = new Map<string, ACPToolSnapshot>();
   private readonly terminalEntries = new Map<string, TerminalEntry>();
   private readonly releasedTerminalResults = new Map<string, TerminalResult>();
+  private readonly pendingReleasedTerminalWrites = new Map<string, Promise<void>>();
   private readonly persistedHistory: AgentTimelineItem[] = [];
   private readonly initialHandle?: AgentPersistenceHandle;
   private readonly resumePurpose: AgentResumePurpose;
@@ -1766,6 +1768,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private replayingHistory = false;
   private bootstrapThreadEventPending = false;
   private readonly terminateProcess: ProcessTerminator;
+  private releasedTerminalCacheDir: string | null = null;
+  private releasedTerminalCacheDirPromise: Promise<string> | null = null;
 
   constructor(config: AgentSessionConfig, options: ACPAgentSessionOptions) {
     this.provider = options.provider;
@@ -2556,7 +2560,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     );
     await Promise.all(terminalTerminations);
     this.terminalEntries.clear();
-    this.releasedTerminalResults.clear();
+    await this.clearReleasedTerminalCache();
 
     if (this.child) {
       await this.terminateProcess(this.child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 });
@@ -2614,7 +2618,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
-    this.pruneReleasedTerminalResults();
     this.logger.trace(
       {
         agentId: this.agentId,
@@ -2632,6 +2635,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       return;
     }
 
+    await this.loadReleasedTerminalResults(params.update);
     const events = this.translateSessionUpdate(params.update);
     this.logger.trace(
       {
@@ -2645,6 +2649,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       "provider.acp.parsed_event",
     );
     this.deliverTranslatedEvents(events);
+    await this.cleanupCompletedReleasedTerminalResult(params.update);
   }
 
   private deliverTranslatedEvents(events: AgentStreamEvent[]): void {
@@ -2788,6 +2793,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       entry.exit = exit;
       if (entry.releasedResult) {
         entry.releasedResult.exit = exit;
+        entry.persistReleasedResult?.();
       }
       resolveExit(exit);
     });
@@ -2815,16 +2821,20 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (!entry.exit) {
       await this.terminateProcess(entry.child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 });
     }
+    const cacheDir = await this.ensureReleasedTerminalCacheDir();
     const result: TerminalResult = {
+      id: params.terminalId,
       output: entry.output,
       truncated: entry.truncated,
       exit: entry.exit,
-      releasedAt: Date.now(),
+      filePath: this.releasedTerminalResultPath(cacheDir, params.terminalId),
     };
     entry.releasedResult = result;
+    entry.persistReleasedResult = () => {
+      void this.persistReleasedTerminalResult(result);
+    };
     syncReleasedTerminalResult(result, entry);
-    this.releasedTerminalResults.set(params.terminalId, result);
-    this.pruneReleasedTerminalResults(result.releasedAt);
+    await this.persistReleasedTerminalResult(result);
     this.terminalEntries.delete(params.terminalId);
   }
 
@@ -3452,12 +3462,129 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     return entry;
   }
 
-  private pruneReleasedTerminalResults(now = Date.now()): void {
-    for (const [terminalId, result] of this.releasedTerminalResults) {
-      if (now - result.releasedAt >= RELEASED_TERMINAL_RESULT_TTL_MS) {
-        this.releasedTerminalResults.delete(terminalId);
+  private async ensureReleasedTerminalCacheDir(): Promise<string> {
+    this.releasedTerminalCacheDirPromise ??= fs
+      .mkdtemp(path.join(tmpdir(), "paseo-acp-terminal-"))
+      .then((directory) => {
+        this.releasedTerminalCacheDir = directory;
+        return directory;
+      });
+    return this.releasedTerminalCacheDirPromise;
+  }
+
+  private releasedTerminalResultPath(cacheDir: string, terminalId: string): string {
+    return path.join(cacheDir, `${encodeURIComponent(terminalId)}.json`);
+  }
+
+  private async persistReleasedTerminalResult(result: TerminalResult): Promise<void> {
+    const previousWrite = this.pendingReleasedTerminalWrites.get(result.id) ?? Promise.resolve();
+    const write = previousWrite
+      .catch(() => undefined)
+      .then(() =>
+        fs.writeFile(
+          result.filePath,
+          JSON.stringify({ output: result.output, truncated: result.truncated, exit: result.exit }),
+          "utf8",
+        ),
+      )
+      .then(() => undefined);
+    this.pendingReleasedTerminalWrites.set(result.id, write);
+    void write.then(
+      () => {
+        if (this.pendingReleasedTerminalWrites.get(result.id) === write) {
+          this.pendingReleasedTerminalWrites.delete(result.id);
+        }
+        return undefined;
+      },
+      () => {
+        if (this.pendingReleasedTerminalWrites.get(result.id) === write) {
+          this.pendingReleasedTerminalWrites.delete(result.id);
+        }
+        return undefined;
+      },
+    );
+    return write;
+  }
+
+  private async loadReleasedTerminalResults(update: SessionUpdate): Promise<void> {
+    this.releasedTerminalResults.clear();
+    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+      return;
+    }
+
+    const previous = this.toolCalls.get(update.toolCallId);
+    const terminalIds = new Set<string>();
+    const terminalFromUpdate = extractTerminalExitContent(update);
+    if (terminalFromUpdate) {
+      terminalIds.add(terminalFromUpdate.terminalId);
+    }
+    for (const content of [...(update.content ?? []), ...(previous?.content ?? [])]) {
+      if (content.type === "terminal") {
+        terminalIds.add(content.terminalId);
       }
     }
+    await Promise.all(
+      [...terminalIds].map((terminalId) => this.loadReleasedTerminalResult(terminalId)),
+    );
+  }
+
+  private async loadReleasedTerminalResult(terminalId: string): Promise<void> {
+    if (this.releasedTerminalResults.has(terminalId)) {
+      return;
+    }
+    await this.pendingReleasedTerminalWrites.get(terminalId)?.catch(() => undefined);
+    const cacheDir = this.releasedTerminalCacheDir;
+    if (!cacheDir) {
+      return;
+    }
+    const filePath = this.releasedTerminalResultPath(cacheDir, terminalId);
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw) as Omit<TerminalResult, "id" | "filePath">;
+      this.releasedTerminalResults.set(terminalId, { ...parsed, id: terminalId, filePath });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        this.logger.debug(
+          { err: error, terminalId },
+          "Failed to load released ACP terminal result",
+        );
+      }
+    }
+  }
+
+  private async cleanupCompletedReleasedTerminalResult(update: SessionUpdate): Promise<void> {
+    if (update.sessionUpdate !== "tool_call_update" || update.status !== "completed") {
+      return;
+    }
+    const snapshot = this.toolCalls.get(update.toolCallId);
+    const terminalIds = snapshot?.content
+      ?.flatMap((content) => (content.type === "terminal" ? [content.terminalId] : []))
+      .filter((terminalId, index, all) => all.indexOf(terminalId) === index);
+    for (const terminalId of terminalIds ?? []) {
+      await this.discardReleasedTerminalResult(terminalId);
+    }
+    this.releasedTerminalResults.clear();
+  }
+
+  private async discardReleasedTerminalResult(terminalId: string): Promise<void> {
+    await this.pendingReleasedTerminalWrites.get(terminalId)?.catch(() => undefined);
+    this.releasedTerminalResults.delete(terminalId);
+    const cacheDir = this.releasedTerminalCacheDir;
+    if (cacheDir) {
+      await fs.rm(this.releasedTerminalResultPath(cacheDir, terminalId), { force: true });
+    }
+  }
+
+  private async clearReleasedTerminalCache(): Promise<void> {
+    await Promise.allSettled(this.pendingReleasedTerminalWrites.values());
+    this.pendingReleasedTerminalWrites.clear();
+    this.releasedTerminalResults.clear();
+    const cacheDir = this.releasedTerminalCacheDir ?? (await this.releasedTerminalCacheDirPromise);
+    if (cacheDir) {
+      await fs.rm(cacheDir, { recursive: true, force: true });
+    }
+    this.releasedTerminalCacheDir = null;
+    this.releasedTerminalCacheDirPromise = null;
   }
 }
 
@@ -4118,6 +4245,7 @@ function appendTerminalOutput(entry: TerminalEntry, chunk: string): void {
   }
   if (entry.releasedResult) {
     syncReleasedTerminalResult(entry.releasedResult, entry);
+    entry.persistReleasedResult?.();
   }
 }
 
