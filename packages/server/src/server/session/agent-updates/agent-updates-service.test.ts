@@ -185,6 +185,12 @@ function buildHarness() {
     sequencedProjects(): Array<ProjectPlacementPayload | null> {
       return sequencedProjects;
     },
+    readDirectory() {
+      return directorySync.readAgents({ generation: "test-generation", afterSeq: 0 });
+    },
+    seedDirectory(agent: AgentSnapshotPayload, project: ProjectPlacementPayload) {
+      directorySync.synchronizeAgents([{ agent, project }], {});
+    },
     agentUpdates(): AgentUpdatePayload[] {
       return emitted
         .filter((message) => message.type === "agent_update")
@@ -475,9 +481,15 @@ describe("forwardLiveAgent", () => {
       filter: { includeArchived: true },
     });
     h.service.flushBootstrapped("sub");
-    h.register(
-      makeAgentPayload({ id: "a", workspaceId: "ws-1", archivedAt: "2026-03-02T00:00:00.000Z" }),
-    );
+    const activePayload = makeAgentPayload({ id: "a", workspaceId: "ws-1" });
+    h.register(activePayload);
+    h.seedDirectory(activePayload, makeProject());
+    const archivedPayload = makeAgentPayload({
+      id: "a",
+      workspaceId: "ws-1",
+      archivedAt: "2026-03-02T00:00:00.000Z",
+    });
+    h.register(archivedPayload);
 
     await h.service.forwardLiveAgent(h.managed("a"));
 
@@ -485,6 +497,10 @@ describe("forwardLiveAgent", () => {
       { kind: "upsert", agent: expect.objectContaining({ id: "a" }), project: makeProject() },
     ]);
     expect(h.sequencedProjects()).toEqual([null]);
+    expect(h.readDirectory()).toMatchObject({
+      entries: [],
+      sync: { mode: "changes", removals: [{ id: "a" }] },
+    });
   });
 
   test("with no subscription, emits no agent_update but still updates the workspace", async () => {
