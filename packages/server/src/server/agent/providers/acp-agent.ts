@@ -127,8 +127,8 @@ import {
 import { withTimeout } from "../../../utils/promise-timeout.js";
 
 const ACP_AUTO_ACCEPT_FEATURE_ID = "auto_accept";
-const MAX_RELEASED_TERMINAL_RESULTS = 128;
 const MAX_RELEASED_TERMINAL_OUTPUT_BYTES = 1024 * 1024;
+const RELEASED_TERMINAL_RESULT_TTL_MS = 5 * 60 * 1000;
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -492,6 +492,7 @@ interface ACPAgentSessionOptions {
   waitForInitialCommands?: boolean;
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
+  terminalProcessSpawner?: typeof spawnProcess;
 }
 
 export interface SpawnedACPProcess {
@@ -633,6 +634,7 @@ interface TerminalResult {
   output: string;
   truncated: boolean;
   exit: TerminalExit | null;
+  releasedAt: number;
 }
 
 export interface ConfigOptionSelector {
@@ -1705,6 +1707,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private waitForInitialCommands: boolean;
   private initialCommandsWaitTimeoutMs: number;
   private readonly extensionCommandsParser?: ACPExtensionCommandsParser;
+  private readonly terminalProcessSpawner?: typeof spawnProcess;
   private currentTurnUsage: AgentUsage | undefined;
   private activeForegroundTurnId: string | null = null;
   private fallbackAssistantMessageId: string | null = null;
@@ -1745,6 +1748,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.waitForInitialCommands = options.waitForInitialCommands ?? false;
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
+    this.terminalProcessSpawner = options.terminalProcessSpawner;
   }
 
   get id(): string | null {
@@ -2531,6 +2535,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
+    this.pruneReleasedTerminalResults();
     this.logger.trace(
       {
         agentId: this.agentId,
@@ -2654,15 +2659,19 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       terminalCommand.shell === false
         ? [this.launchEnv, env, createStringCommandShellEnvOverlay()]
         : [this.launchEnv, env];
-    const child = spawnProcess(terminalCommand.command, terminalCommand.args, {
-      cwd: params.cwd ?? this.config.cwd,
-      ...createProviderEnvSpec({
-        runtimeSettings: this.runtimeSettings,
-        overlays: commandEnvOverlays,
-      }),
-      shell: terminalCommand.shell,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = (this.terminalProcessSpawner ?? spawnProcess)(
+      terminalCommand.command,
+      terminalCommand.args,
+      {
+        cwd: params.cwd ?? this.config.cwd,
+        ...createProviderEnvSpec({
+          runtimeSettings: this.runtimeSettings,
+          overlays: commandEnvOverlays,
+        }),
+        shell: terminalCommand.shell,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
 
     let resolveExit!: (exit: TerminalExit) => void;
     let rejectExit!: (error: Error) => void;
@@ -2731,15 +2740,12 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       output: entry.output,
       truncated: entry.truncated,
       exit: entry.exit,
+      releasedAt: Date.now(),
     };
     entry.releasedResult = result;
     syncReleasedTerminalResult(result, entry);
     this.releasedTerminalResults.set(params.terminalId, result);
-    while (this.releasedTerminalResults.size > MAX_RELEASED_TERMINAL_RESULTS) {
-      const oldestId = this.releasedTerminalResults.keys().next().value;
-      if (oldestId === undefined) break;
-      this.releasedTerminalResults.delete(oldestId);
-    }
+    this.pruneReleasedTerminalResults(result.releasedAt);
     this.terminalEntries.delete(params.terminalId);
   }
 
@@ -3324,6 +3330,14 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       throw new Error(`Unknown terminal '${terminalId}'`);
     }
     return entry;
+  }
+
+  private pruneReleasedTerminalResults(now = Date.now()): void {
+    for (const [terminalId, result] of this.releasedTerminalResults) {
+      if (now - result.releasedAt >= RELEASED_TERMINAL_RESULT_TTL_MS) {
+        this.releasedTerminalResults.delete(terminalId);
+      }
+    }
   }
 }
 
