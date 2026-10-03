@@ -3357,6 +3357,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private async persistReleasedTerminalResult(result: TerminalResult): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     const previousWrite = this.pendingReleasedTerminalWrites.get(result.id) ?? Promise.resolve();
     const write = previousWrite
       .catch(() => undefined)
@@ -3383,7 +3386,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         return undefined;
       },
     );
-    return write;
+    try {
+      await write;
+    } catch (error) {
+      if (!this.closed) {
+        throw error;
+      }
+    }
   }
 
   private async loadReleasedTerminalResults(update: SessionUpdate): Promise<void> {
@@ -3433,7 +3442,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private async cleanupCompletedReleasedTerminalResult(update: SessionUpdate): Promise<void> {
-    if (update.sessionUpdate !== "tool_call_update" || update.status !== "completed") {
+    if (
+      update.sessionUpdate !== "tool_call_update" ||
+      (update.status !== "completed" && update.status !== "failed")
+    ) {
       return;
     }
     const snapshot = this.toolCalls.get(update.toolCallId);
