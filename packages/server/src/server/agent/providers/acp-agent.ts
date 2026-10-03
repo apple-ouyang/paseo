@@ -2512,6 +2512,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
    * @param capabilities - the initialize result's `agentCapabilities`.
    */
   private bindConversationRewind(capabilities: ACPAgentCapabilities | null): void {
+    // Rewind needs session/load to replay the fork before the daemon exposes it.
+    // Do not advertise a control that this adapter cannot complete safely.
+    if (!capabilities?.loadSession) {
+      return;
+    }
     const method = readACPConversationRewindMethod(capabilities);
     if (method === null) {
       return;
@@ -2548,8 +2553,46 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (!forkSessionId) {
       throw new Error(`${this.provider} conversation rewind returned no session id`);
     }
-    this.rebindConversationSession(forkSessionId);
-    await this.replayConversationHistory(forkSessionId);
+    const previousState = {
+      sessionId: this.sessionId,
+      pendingUserMessage: this.pendingUserMessage,
+      submittedUserMessageTurnId: this.submittedUserMessageTurnId,
+      toolCalls: new Map(this.toolCalls),
+      fallbackAssistantMessageId: this.fallbackAssistantMessageId,
+      persistedHistory: [...this.persistedHistory],
+      historyPending: this.historyPending,
+      replayingHistory: this.replayingHistory,
+      configOptions: [...this.configOptions],
+      availableModes: [...this.availableModes],
+      currentMode: this.currentMode,
+      availableModels: this.availableModels ? [...this.availableModels] : null,
+      currentModel: this.currentModel,
+      thinkingOptionId: this.thinkingOptionId,
+    };
+    try {
+      this.rebindConversationSession(forkSessionId);
+      await this.replayConversationHistory(forkSessionId);
+    } catch (error) {
+      this.sessionId = previousState.sessionId;
+      this.pendingUserMessage = previousState.pendingUserMessage;
+      this.submittedUserMessageTurnId = previousState.submittedUserMessageTurnId;
+      this.toolCalls.clear();
+      for (const [toolCallId, toolCall] of previousState.toolCalls) {
+        this.toolCalls.set(toolCallId, toolCall);
+      }
+      this.fallbackAssistantMessageId = previousState.fallbackAssistantMessageId;
+      this.persistedHistory.length = 0;
+      this.persistedHistory.push(...previousState.persistedHistory);
+      this.historyPending = previousState.historyPending;
+      this.replayingHistory = previousState.replayingHistory;
+      this.configOptions = previousState.configOptions;
+      this.availableModes = previousState.availableModes;
+      this.currentMode = previousState.currentMode;
+      this.availableModels = previousState.availableModels;
+      this.currentModel = previousState.currentModel;
+      this.thinkingOptionId = previousState.thinkingOptionId;
+      throw error;
+    }
   }
 
   /** Point this session at a provider-side fork and drop the old turn state. */
@@ -2905,7 +2948,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     return {};
   }
 
-  private async spawnProcess(): Promise<SpawnedACPProcess> {
+  protected async spawnProcess(): Promise<SpawnedACPProcess> {
     const prefix = await resolveProviderLaunch({
       commandConfig: this.runtimeSettings?.command,
       defaultBinary: this.defaultCommand[0],

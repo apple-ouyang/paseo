@@ -13,6 +13,7 @@ import {
   type Agent,
   type AgentCapabilities,
   type CreateTerminalRequest,
+  type InitializeResponse,
   PermissionOption,
   PromptResponse,
   RequestPermissionRequest,
@@ -829,6 +830,7 @@ describe("ACP conversation rewind", () => {
   }
 
   const rewindCapability = {
+    loadSession: true,
     _meta: { conversationRewind: { method: "_paseo/session/revert", target: "user-message-id" } },
   } as AgentCapabilities;
 
@@ -853,23 +855,50 @@ describe("ACP conversation rewind", () => {
     ).toBeNull();
   });
 
-  test("advertises rewind per session without mutating the shared capability object", () => {
-    const session = createSession();
-    const internals = asInternals<ACPConversationRewindInternals>(session);
-    const shared = internals.capabilities;
+  test("advertises rewind through session initialization without mutating shared capabilities", async () => {
+    const newSession = vi.fn(async () => ({ sessionId: "session-1", configOptions: [] }));
+    class InitializedRewindSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        return {
+          child: createTerminalChildStub() as unknown as ChildProcessWithoutNullStreams,
+          connection: { newSession } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: rewindCapability } as unknown as InitializeResponse,
+        };
+      }
+    }
 
-    internals.bindConversationRewind(rewindCapability);
+    const session = new InitializedRewindSession(
+      { provider: "dsh", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "dsh",
+        logger: createTestLogger(),
+        defaultCommand: ["dsh", "acp"],
+        defaultModes: [],
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: true,
+          supportsMcpServers: true,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+        },
+      },
+    );
+    const shared = session.capabilities;
+
+    await session.initializeNewSession();
 
     expect(session.capabilities.supportsRewindConversation).toBe(true);
     expect(session.capabilities).not.toBe(shared);
     expect(shared.supportsRewindConversation).toBeUndefined();
+    expect(newSession).toHaveBeenCalledWith({ cwd: "/tmp/paseo-acp-test", mcpServers: [] });
   });
 
-  test("stays hidden when the provider advertises nothing", () => {
+  test("stays hidden when the provider cannot replay history", () => {
     const session = createSession();
     const internals = asInternals<ACPConversationRewindInternals>(session);
 
-    internals.bindConversationRewind({} as AgentCapabilities);
+    internals.bindConversationRewind({ _meta: rewindCapability._meta } as AgentCapabilities);
 
     expect(session.capabilities.supportsRewindConversation).toBeUndefined();
     expect(internals.conversationRewindMethod).toBeNull();
@@ -954,6 +983,26 @@ describe("ACP conversation rewind", () => {
       "returned no session id",
     );
     expect(loadSession).not.toHaveBeenCalled();
+  });
+
+  test("keeps the original session when fork history loading fails", async () => {
+    const session = createSessionWithConfig({ provider: "dsh" });
+    const internals = asInternals<ACPConversationRewindInternals>(session);
+    internals.sessionId = "session-1";
+    internals.bindConversationRewind(rewindCapability);
+    const loadSession = vi.fn(async () => {
+      throw new Error("session/load failed");
+    });
+    internals.connection = {
+      extMethod: vi.fn(async () => ({ sessionId: "session-2" })),
+      loadSession,
+    };
+
+    await expect(session.revertConversation({ messageId: "client-1" })).rejects.toThrow(
+      "session/load failed",
+    );
+    expect(session.id).toBe("session-1");
+    expect(loadSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-2" }));
   });
 
   test("sends the client message id in prompt _meta only for rewind-capable agents", async () => {
