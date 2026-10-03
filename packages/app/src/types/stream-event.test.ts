@@ -109,6 +109,7 @@ describe("applyStreamEvent", () => {
     expect(result.head).toHaveLength(1);
     expect((result.head[0] as ThoughtItem).text).toHaveLength(32_000);
     expect((result.head[0] as ThoughtItem).text).toBe("r".repeat(20_000) + "s".repeat(12_000));
+    expect((result.head[0] as ThoughtItem).capped).toBe(true);
   });
 
   it("flushes reasoning to tail when tool call arrives", () => {

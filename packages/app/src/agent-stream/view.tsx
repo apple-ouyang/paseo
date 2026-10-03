@@ -38,6 +38,7 @@ import {
   TodoListCard,
   CompactionMarker,
   MessageOuterSpacingProvider,
+  assistantMessageStylesheet,
   type InlinePathTarget,
 } from "@/components/message";
 import { PlanCard } from "@/components/plan-card";
@@ -751,6 +752,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             itemId={item.id}
             onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
             text={item.text}
+            capped={item.capped === true}
             status={item.status}
             isLastInSequence={layoutItem.isLastInToolSequence}
             defaultExpanded={autoExpandReasoning}
@@ -1294,6 +1296,7 @@ interface ThoughtSlotProps {
   itemId: string;
   onInlineDetailsExpandedChangeByItemId: (itemId: string, expanded: boolean) => void;
   text: string;
+  capped: boolean;
   status: Extract<StreamItem, { kind: "thought" }>["status"];
   isLastInSequence: boolean;
   defaultExpanded: boolean;
@@ -1304,23 +1307,33 @@ function ThoughtSlot({
   itemId,
   onInlineDetailsExpandedChangeByItemId,
   text,
+  capped,
   status,
   isLastInSequence,
   defaultExpanded,
 }: ThoughtSlotProps) {
-  const renderedText = capAssistantMessageForRender(text).text;
+  const { t } = useTranslation();
+  const renderedThought = capAssistantMessageForRender(text);
+  const renderedText = renderedThought.text;
   const revealedText = useRevealedText(renderedText, status === "ready" ? "complete" : "streaming");
   return (
-    <ToolCallSlot
-      itemId={itemId}
-      onInlineDetailsExpandedChangeByItemId={onInlineDetailsExpandedChangeByItemId}
-      toolName="thinking"
-      args={revealedText}
-      status={status === "ready" ? "completed" : "executing"}
-      isLastInSequence={isLastInSequence}
-      defaultExpanded={defaultExpanded}
-      forceInline={defaultExpanded}
-    />
+    <>
+      <ToolCallSlot
+        itemId={itemId}
+        onInlineDetailsExpandedChangeByItemId={onInlineDetailsExpandedChangeByItemId}
+        toolName="thinking"
+        args={revealedText}
+        status={status === "ready" ? "completed" : "executing"}
+        isLastInSequence={isLastInSequence}
+        defaultExpanded={defaultExpanded}
+        forceInline={defaultExpanded}
+      />
+      {capped || renderedThought.capped ? (
+        <Text testID="thought-capped-notice" style={assistantMessageStylesheet.cappedNotice}>
+          {t("agentStream.thoughtCapped")}
+        </Text>
+      ) : null}
+    </>
   );
 }
 

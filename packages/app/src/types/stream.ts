@@ -731,6 +731,8 @@ export interface ThoughtItem {
   text: string;
   timestamp: Date;
   status: ThoughtStatus;
+  /** True when the thought text was shortened by the render safety cap. */
+  capped?: boolean;
 }
 
 export type OrchestratorToolCallStatus = "executing" | "completed" | "failed";
@@ -980,21 +982,24 @@ function appendThought(
   timestamp: Date,
   timelineCursor?: TimelinePosition,
 ): StreamItem[] {
-  const { chunk, hasContent } = normalizeChunk(capAssistantMessageForRender(text).text);
-  if (!chunk) {
-    return state;
-  }
-
+  const cappedChunk = capAssistantMessageForRender(text);
+  const { chunk, hasContent } = normalizeChunk(cappedChunk.text);
   const last = state[state.length - 1];
   if (last && last.kind === "thought") {
+    const cappedText = capAssistantMessageForRender(`${last.text}${chunk}`);
     const updated: ThoughtItem = {
       ...last,
       ...(timelineCursor ? { timelineCursor } : {}),
-      text: capAssistantMessageForRender(`${last.text}${chunk}`).text,
+      text: cappedText.text,
       timestamp,
       status: "loading",
+      ...(last.capped || cappedChunk.capped || cappedText.capped ? { capped: true } : {}),
     };
     return [...state.slice(0, -1), updated];
+  }
+
+  if (!chunk) {
+    return state;
   }
 
   if (!hasContent) {
@@ -1009,6 +1014,7 @@ function appendThought(
     text: chunk,
     timestamp,
     status: "loading",
+    ...(cappedChunk.capped ? { capped: true } : {}),
   };
   return [...state, item];
 }
