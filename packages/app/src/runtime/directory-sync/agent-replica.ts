@@ -32,7 +32,10 @@ function isRunningStart(previous: Agent, next: Agent | undefined): boolean {
 function isRunningStop(previous: Agent, next: Agent | undefined): boolean {
   return (
     (previous.turn.phase === "open" && next?.turn.phase === "idle") ||
-    (previous.turn.phase === "idle" && previous.status === "running" && next?.status !== "running")
+    (next?.turn.phase === "idle" &&
+      previous.turn.phase === "idle" &&
+      previous.status === "running" &&
+      next.status !== "running")
   );
 }
 
