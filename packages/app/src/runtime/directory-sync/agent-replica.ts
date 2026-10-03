@@ -23,6 +23,19 @@ function projectAgentDirectoryEntry(agent: Agent): FetchAgentsEntry {
   };
 }
 
+function isRunningStart(previous: Agent, next: Agent | undefined): boolean {
+  return (
+    next?.turn.phase === "open" || (previous.status !== "running" && next?.status === "running")
+  );
+}
+
+function isRunningStop(previous: Agent, next: Agent | undefined): boolean {
+  return (
+    (previous.turn.phase === "open" && next?.turn.phase === "idle") ||
+    (previous.turn.phase === "idle" && previous.status === "running" && next?.status !== "running")
+  );
+}
+
 export interface AgentLifecycleToken {
   readonly agentId: string;
   readonly version: number;
@@ -151,10 +164,9 @@ export class AgentDirectoryReplica {
     for (const agentId of nextIds) this.members.add(agentId);
     const agents = this.storeProjection.replaceFetched(reconciled);
     for (const [agentId, previousAgent] of previous) {
-      if (agents.get(agentId)?.turn.phase === "open") {
-        this.stoppedRunningAgents.delete(agentId);
-      }
-      if (previousAgent.turn.phase === "open" && agents.get(agentId)?.turn.phase === "idle") {
+      const nextAgent = agents.get(agentId);
+      if (isRunningStart(previousAgent, nextAgent)) this.stoppedRunningAgents.delete(agentId);
+      if (isRunningStop(previousAgent, nextAgent)) {
         this.notifyStoppedRunning(agentId);
       }
     }

@@ -246,6 +246,25 @@ describe("AgentDirectoryReplica", () => {
     store.clearSession(serverId);
   });
 
+  it("drains after a status-only stop arrives in a refreshed snapshot", () => {
+    const serverId = "agent-replica-status-snapshot-stop";
+    const store = useSessionStore.getState();
+    store.initializeSession(serverId, null as unknown as DaemonClient);
+    const stopped: string[] = [];
+    const replica = new AgentDirectoryReplica(
+      serverId,
+      (agentId) => stopped.push(agentId),
+      () => undefined,
+    );
+    replica.commitSnapshot([entry(payload("idle"))], []);
+
+    replica.commitSnapshot([entry({ ...payload("running"), status: "running" })], []);
+    replica.commitSnapshot([entry({ ...payload("idle again"), status: "idle" })], []);
+
+    expect(stopped).toEqual(["agent"]);
+    store.clearSession(serverId);
+  });
+
   it("preserves cancellation state when the same active turn is snapshotted", () => {
     const serverId = "agent-replica-cancellation-snapshot";
     const store = useSessionStore.getState();
