@@ -1,6 +1,6 @@
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -98,6 +98,7 @@ describe("buildACPClientCapabilities", () => {
 
 interface ACPSessionInternals {
   sessionId: string | null;
+  releasedTerminalCacheDir: string | null;
   connection: { prompt: (...args: unknown[]) => Promise<PromptResponse> };
   activeForegroundTurnId: string | null;
   configOptions: SessionConfigOption[];
@@ -983,6 +984,57 @@ describe("ACP tool-call detail mapping", () => {
         exitCode: 0,
       },
     });
+
+    await session.close();
+    child.stdout!.emit("data", "late-after-close\n");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  test("cleans released terminal results after failed tool calls", async () => {
+    const child = createTerminalChildStub();
+    const session = createSessionWithConfig({
+      provider: "devin",
+      terminalProcessSpawner: () => child,
+    });
+    const internals = asInternals<ACPSessionInternals>(session);
+    internals.sessionId = "session-1";
+
+    const { terminalId } = await session.createTerminal({
+      sessionId: "session-1",
+      command: "false",
+    });
+    child.stdout!.emit("data", "failed-output\n");
+    child.emit("exit", 1, null);
+    await session.waitForTerminalExit({ sessionId: "session-1", terminalId });
+    await session.releaseTerminal({ sessionId: "session-1", terminalId });
+
+    const cacheDir = internals.releasedTerminalCacheDir;
+    expect(cacheDir).toBeTruthy();
+    const resultPath = path.join(cacheDir!, `${encodeURIComponent(terminalId)}.json`);
+    await expect(access(resultPath)).resolves.toBeUndefined();
+
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "failed-call",
+        title: "false",
+        kind: "execute",
+        status: "in_progress",
+        _meta: { terminal_exit: { terminal_id: terminalId } },
+      } as SessionUpdate,
+    });
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "failed-call",
+        status: "failed",
+      } as SessionUpdate,
+    });
+
+    await expect(access(resultPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await session.close();
   });
 
   test("renders dsh read and search calls with file context", async () => {
