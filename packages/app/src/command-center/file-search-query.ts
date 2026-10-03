@@ -1,10 +1,9 @@
 import { isAbsolutePath, isHomeRelativePath, isPathWithinRoot } from "@/utils/path";
 
 /**
- * A `getDirectorySuggestions` call the daemon can answer for a path the user typed outside the
- * active workspace. The daemon takes a root plus a query relative to that root, and a workspace is
- * the only root it already knows about — so opening `/Users/me/diagrams/x.html` from a workspace at
- * `~/code/app` has to borrow the typed path's own directory as the root.
+ * A `getDirectorySuggestions` call. The daemon takes a root plus a query relative to that root, and
+ * a workspace is the only root it already knows about — so a path typed outside the workspace has
+ * to borrow the typed path's own directory as the root.
  */
 export interface DaemonFileSearchRequest {
   /** Directory the daemon searches under. */
@@ -15,37 +14,86 @@ export interface DaemonFileSearchRequest {
   root: string;
 }
 
+export interface DaemonFileSearchPlan {
+  /** Lists matches around the typed path. */
+  list: DaemonFileSearchRequest;
+  /**
+   * Retrieves the typed path itself. Discovery drops hidden and Git-ignored names, so the exact
+   * file the caller named needs a retrieval request of its own: `matchMode: "suffix"` with the
+   * path spelled out is the daemon's supported way to resolve a named entry.
+   */
+  exact: DaemonFileSearchRequest | null;
+}
+
 const TRAILING_SEPARATORS = /\/+$/;
+const DRIVE_LETTER = /^[A-Za-z]:$/;
 
 /**
- * Plans a re-rooted search for an absolute or `~`-relative query, or null when the active workspace
+ * Collapses `.` and `..` lexically, so containment is judged on the path the daemon will resolve:
+ * `/code/app/../other/plan.md` starts with the workspace but does not stay in it.
+ */
+function collapsePathSegments(value: string): string {
+  // A UNC path carries host and share segments that `..` must not pop, so leave it as typed.
+  if (value.startsWith("//")) {
+    return value;
+  }
+  const drive = /^([A-Za-z]:)\//.exec(value);
+  let prefix = "";
+  if (drive) {
+    prefix = `${drive[1]}/`;
+  } else if (value.startsWith("/")) {
+    prefix = "/";
+  }
+  const collapsed: string[] = [];
+  for (const segment of value.slice(prefix.length).split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      collapsed.pop();
+      continue;
+    }
+    collapsed.push(segment);
+  }
+  return prefix + collapsed.join("/");
+}
+
+/** On Windows a bare `C:` means "the current directory on drive C", so keep the separator. */
+function toDirectoryRoot(value: string): string {
+  if (DRIVE_LETTER.test(value)) {
+    return `${value}/`;
+  }
+  return value || "/";
+}
+
+/**
+ * Plans the daemon calls for an absolute or `~`-relative query, or null when the active workspace
  * already answers it. Absolute queries inside the workspace stay untouched: the daemon resolves
  * those itself and returns workspace-relative paths, which is what file rows and tabs expect.
  */
 export function planDaemonFileSearchRequest(input: {
   query: string;
   workspaceRoot?: string | null;
-}): DaemonFileSearchRequest | null {
-  const query = input.query.trim().replace(/\\/g, "/");
-  if (!query) {
+}): DaemonFileSearchPlan | null {
+  const typed = input.query.trim().replace(/\\/g, "/");
+  if (!typed) {
     return null;
   }
-  const homeRelative = isHomeRelativePath(query);
-  if (!homeRelative && !isAbsolutePath(query)) {
-    return null;
-  }
-  const workspaceRoot = input.workspaceRoot?.trim().replace(/\\/g, "/") ?? "";
-  if (!homeRelative && workspaceRoot && isPathWithinRoot(query, workspaceRoot)) {
+  const homeRelative = isHomeRelativePath(typed);
+  if (!homeRelative && !isAbsolutePath(typed)) {
     return null;
   }
 
-  const browsed = query.replace(TRAILING_SEPARATORS, "");
-  if (!browsed || browsed === "~") {
-    const cwd = browsed || "/";
-    return { cwd, query: "", root: cwd };
+  const collapsed = collapsePathSegments(typed);
+  const workspaceRoot = input.workspaceRoot?.trim().replace(/\\/g, "/") ?? "";
+  if (!homeRelative && workspaceRoot && isPathWithinRoot(collapsed, workspaceRoot)) {
+    return null;
   }
-  if (TRAILING_SEPARATORS.test(query)) {
-    return { cwd: browsed, query: "", root: browsed };
+
+  const browsed = collapsed.replace(TRAILING_SEPARATORS, "");
+  if (!browsed || browsed === "~" || TRAILING_SEPARATORS.test(typed)) {
+    const root = toDirectoryRoot(browsed);
+    return { list: { cwd: root, query: "", root }, exact: null };
   }
 
   const separator = browsed.lastIndexOf("/");
@@ -53,8 +101,12 @@ export function planDaemonFileSearchRequest(input: {
   if (separator > 0) {
     parent = browsed.slice(0, separator);
   }
-  const cwd = /^[A-Za-z]:$/.test(parent) ? `${parent}/` : parent;
-  return { cwd, query: browsed.slice(separator + 1), root: cwd };
+  const root = toDirectoryRoot(parent);
+  const name = browsed.slice(separator + 1);
+  return {
+    list: { cwd: root, query: name, root },
+    exact: { cwd: root, query: `./${name}`, root },
+  };
 }
 
 /** Rebuilds an openable path from a suggestion the daemon returned relative to `root`. */

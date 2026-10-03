@@ -31,10 +31,27 @@ describe("planDaemonFileSearchRequest", () => {
         workspaceRoot: "/code/app",
       }),
     ).toEqual({
-      cwd: "/Users/me/.agent/diagrams",
-      query: "plan.html",
-      root: "/Users/me/.agent/diagrams",
+      list: {
+        cwd: "/Users/me/.agent/diagrams",
+        query: "plan.html",
+        root: "/Users/me/.agent/diagrams",
+      },
+      exact: {
+        cwd: "/Users/me/.agent/diagrams",
+        query: "./plan.html",
+        root: "/Users/me/.agent/diagrams",
+      },
     });
+  });
+
+  it("asks for the named path itself, so hidden and Git-ignored names still resolve", () => {
+    const plan = planDaemonFileSearchRequest({
+      query: "/tmp/private/.env",
+      workspaceRoot: "/code/app",
+    });
+    expect(plan?.exact).toEqual({ cwd: "/tmp/private", query: "./.env", root: "/tmp/private" });
+    // Discovery keeps hidden files out of the listing; the named lookup is what surfaces them.
+    expect(plan?.list.query).toBe(".env");
   });
 
   it("browses the typed directory itself when the query ends with a separator", () => {
@@ -44,53 +61,87 @@ describe("planDaemonFileSearchRequest", () => {
         workspaceRoot: "/code/app",
       }),
     ).toEqual({
-      cwd: "/Users/me/.agent/diagrams",
-      query: "",
-      root: "/Users/me/.agent/diagrams",
+      list: { cwd: "/Users/me/.agent/diagrams", query: "", root: "/Users/me/.agent/diagrams" },
+      exact: null,
     });
     expect(planDaemonFileSearchRequest({ query: "/", workspaceRoot: "/code/app" })).toEqual({
-      cwd: "/",
-      query: "",
-      root: "/",
+      list: { cwd: "/", query: "", root: "/" },
+      exact: null,
+    });
+  });
+
+  it("resolves parent segments before deciding where the path lives", () => {
+    // `/code/app/../other` starts with the workspace path but leaves it.
+    expect(
+      planDaemonFileSearchRequest({
+        query: "/code/app/../other/plan.md",
+        workspaceRoot: "/code/app",
+      }),
+    ).toEqual({
+      list: { cwd: "/code/other", query: "plan.md", root: "/code/other" },
+      exact: { cwd: "/code/other", query: "./plan.md", root: "/code/other" },
+    });
+    expect(
+      planDaemonFileSearchRequest({
+        query: "/code/app/./src/../src/index.ts",
+        workspaceRoot: "/code/app",
+      }),
+    ).toBeNull();
+    expect(
+      planDaemonFileSearchRequest({ query: "/../tmp/notes.md", workspaceRoot: "/code/app" }),
+    ).toEqual({
+      list: { cwd: "/tmp", query: "notes.md", root: "/tmp" },
+      exact: { cwd: "/tmp", query: "./notes.md", root: "/tmp" },
     });
   });
 
   it("treats a home-relative path as its own root", () => {
     expect(planDaemonFileSearchRequest({ query: "~/.agent/diagrams/plan.html" })).toEqual({
-      cwd: "~/.agent/diagrams",
-      query: "plan.html",
-      root: "~/.agent/diagrams",
+      list: { cwd: "~/.agent/diagrams", query: "plan.html", root: "~/.agent/diagrams" },
+      exact: { cwd: "~/.agent/diagrams", query: "./plan.html", root: "~/.agent/diagrams" },
     });
     expect(planDaemonFileSearchRequest({ query: "~/", workspaceRoot: "/code/app" })).toEqual({
-      cwd: "~",
-      query: "",
-      root: "~",
+      list: { cwd: "~", query: "", root: "~" },
+      exact: null,
     });
   });
 
   it("keeps a home-relative path even when the workspace is the home directory", () => {
     expect(
       planDaemonFileSearchRequest({ query: "~/notes/todo.md", workspaceRoot: "/Users/me" }),
-    ).toEqual({ cwd: "~/notes", query: "todo.md", root: "~/notes" });
+    ).toEqual({
+      list: { cwd: "~/notes", query: "todo.md", root: "~/notes" },
+      exact: { cwd: "~/notes", query: "./todo.md", root: "~/notes" },
+    });
   });
 
-  it("normalizes Windows separators and drive-letter roots", () => {
+  it("normalizes Windows separators and keeps a drive root a root", () => {
     expect(
       planDaemonFileSearchRequest({
         query: "C:\\Users\\me\\plan.html",
         workspaceRoot: "C:\\code\\app",
       }),
-    ).toEqual({ cwd: "C:/Users/me", query: "plan.html", root: "C:/Users/me" });
+    ).toEqual({
+      list: { cwd: "C:/Users/me", query: "plan.html", root: "C:/Users/me" },
+      exact: { cwd: "C:/Users/me", query: "./plan.html", root: "C:/Users/me" },
+    });
+    // `C:` alone means "the current directory on drive C", not the drive root.
+    expect(planDaemonFileSearchRequest({ query: "C:/", workspaceRoot: "C:/code/app" })).toEqual({
+      list: { cwd: "C:/", query: "", root: "C:/" },
+      exact: null,
+    });
     expect(
       planDaemonFileSearchRequest({ query: "C:/plan.html", workspaceRoot: "C:/code/app" }),
-    ).toEqual({ cwd: "C:/", query: "plan.html", root: "C:/" });
+    ).toEqual({
+      list: { cwd: "C:/", query: "plan.html", root: "C:/" },
+      exact: { cwd: "C:/", query: "./plan.html", root: "C:/" },
+    });
   });
 
   it("re-roots a query with no workspace root to compare against", () => {
     expect(planDaemonFileSearchRequest({ query: "/tmp/notes.md" })).toEqual({
-      cwd: "/tmp",
-      query: "notes.md",
-      root: "/tmp",
+      list: { cwd: "/tmp", query: "notes.md", root: "/tmp" },
+      exact: { cwd: "/tmp", query: "./notes.md", root: "/tmp" },
     });
   });
 });

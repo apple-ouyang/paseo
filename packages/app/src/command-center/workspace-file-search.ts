@@ -85,8 +85,10 @@ export function useWorkspaceFileSearch(input: { enabled: boolean; query: string 
     const activeCwd = cwd;
     // A typed absolute path may live outside the workspace, which the workspace-scoped search
     // cannot reach. Re-root that query on the typed path's own directory and re-attach the root to
-    // the suggestions, so the row opens the same path the user named.
+    // the suggestions, so the row opens the same path the user named. The named path is also
+    // retrieved on its own, because discovery drops hidden and Git-ignored names.
     const plan = planDaemonFileSearchRequest({ query: input.query, workspaceRoot: activeCwd });
+    const exactRequest = plan?.exact ?? null;
 
     let cancelled = false;
     setState((previous) => ({
@@ -98,18 +100,42 @@ export function useWorkspaceFileSearch(input: { enabled: boolean; query: string 
     }));
     async function search(): Promise<void> {
       try {
-        const payload = await activeClient.getDirectorySuggestions({
-          cwd: plan?.cwd ?? activeCwd,
-          query: plan?.query ?? input.query,
-          includeFiles: true,
-          includeDirectories: false,
-          limit: FILE_SEARCH_LIMIT,
-        });
+        const [payload, exactPayload] = await Promise.all([
+          activeClient.getDirectorySuggestions({
+            cwd: plan?.list.cwd ?? activeCwd,
+            query: plan?.list.query ?? input.query,
+            includeFiles: true,
+            includeDirectories: false,
+            limit: FILE_SEARCH_LIMIT,
+          }),
+          exactRequest
+            ? activeClient
+                .getDirectorySuggestions({
+                  cwd: exactRequest.cwd,
+                  query: exactRequest.query,
+                  includeFiles: true,
+                  includeDirectories: false,
+                  matchMode: "suffix",
+                  limit: 1,
+                })
+                .catch(() => null)
+            : Promise.resolve(null),
+        ]);
         if (cancelled) return;
+        const exactEntries = exactPayload?.error
+          ? []
+          : describeFileEntries(exactPayload?.entries ?? [], exactRequest?.root ?? null);
+        const listedEntries = payload.error
+          ? []
+          : describeFileEntries(payload.entries, plan?.list.root ?? null);
+        const namedPaths = new Set(exactEntries.map((entry) => entry.path));
         setState({
           sourceKey,
           requestKey,
-          entries: payload.error ? [] : describeFileEntries(payload.entries, plan?.root ?? null),
+          entries: [
+            ...exactEntries,
+            ...listedEntries.filter((entry) => !namedPaths.has(entry.path)),
+          ],
           loading: false,
           error: payload.error ?? null,
         });
