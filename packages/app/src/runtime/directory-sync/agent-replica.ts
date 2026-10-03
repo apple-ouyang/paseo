@@ -32,6 +32,7 @@ export class AgentDirectoryReplica {
   private readonly lifecycleVersions = new Map<string, number>();
   private readonly members = new Set<string>();
   private readonly pendingCacheReads = new Set<string>();
+  private readonly stoppedRunningAgents = new Set<string>();
   private readonly storeProjection: AgentStoreProjection;
 
   constructor(
@@ -106,8 +107,11 @@ export class AgentDirectoryReplica {
     } else {
       this.members.add(delta.agent.id);
       if (!before) this.advance(delta.agent.id);
+      if (result.agent?.turn.phase === "open") {
+        this.stoppedRunningAgents.delete(result.agent.id);
+      }
     }
-    if (result.stoppedRunning) this.onStoppedRunning(result.agentId);
+    if (result.stoppedRunning) this.notifyStoppedRunning(result.agentId);
     this.persist(
       result.agent
         ? [this.agentUpsert(result.agent)]
@@ -147,8 +151,11 @@ export class AgentDirectoryReplica {
     for (const agentId of nextIds) this.members.add(agentId);
     const agents = this.storeProjection.replaceFetched(reconciled);
     for (const [agentId, previousAgent] of previous) {
+      if (agents.get(agentId)?.turn.phase === "open") {
+        this.stoppedRunningAgents.delete(agentId);
+      }
       if (previousAgent.turn.phase === "open" && agents.get(agentId)?.turn.phase === "idle") {
-        this.onStoppedRunning(agentId);
+        this.notifyStoppedRunning(agentId);
       }
     }
     if (persist) {
@@ -205,6 +212,7 @@ export class AgentDirectoryReplica {
 
   remove(agentId: string): void {
     this.members.delete(agentId);
+    this.stoppedRunningAgents.delete(agentId);
     this.advance(agentId);
     this.storeProjection.remove(agentId);
     this.persist([{ kind: "agent", type: "delete", id: agentId }]);
@@ -215,10 +223,20 @@ export class AgentDirectoryReplica {
     transition: TurnLivenessTransition | readonly TurnLivenessTransition[],
   ): void {
     const wasRunning = this.storeProjection.get(agentId)?.turn.phase === "open";
+    const startsRunning = Array.isArray(transition)
+      ? transition.some((item) => item.type === "stream_open")
+      : transition.type === "stream_open";
+    if (startsRunning) this.stoppedRunningAgents.delete(agentId);
     const accepted = this.storeProjection.applyTurn(agentId, transition);
     if (!accepted) return;
     this.persist([this.agentUpsert(accepted)]);
-    if (wasRunning && accepted.turn.phase === "idle") this.onStoppedRunning(agentId);
+    if (wasRunning && accepted.turn.phase === "idle") this.notifyStoppedRunning(agentId);
+  }
+
+  private notifyStoppedRunning(agentId: string): void {
+    if (this.stoppedRunningAgents.has(agentId)) return;
+    this.stoppedRunningAgents.add(agentId);
+    this.onStoppedRunning(agentId);
   }
 
   private agentUpsert(agent: Agent): DirectoryReplicaMutation {

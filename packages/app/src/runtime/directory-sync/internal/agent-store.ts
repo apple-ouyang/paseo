@@ -99,9 +99,14 @@ export class AgentStoreProjection {
     }
     this.replacePendingPermissions(accepted);
     useSessionStore.getState().setAgentLastActivity(accepted.id, accepted.lastActivityAt);
+    const stoppedRunning =
+      (previous?.turn.phase === "open" && accepted.turn.phase === "idle") ||
+      (previous?.turn.phase === "idle" &&
+        previous.status === "running" &&
+        accepted.status !== "running");
     return {
       agentId: accepted.id,
-      stoppedRunning: previous?.turn.phase === "open" && accepted.turn.phase === "idle",
+      stoppedRunning,
       agent: accepted,
     };
   }
