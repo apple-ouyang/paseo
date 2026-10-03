@@ -122,7 +122,7 @@ describe("applySlashCommandReplacement", () => {
 });
 
 describe("filterInlineSkillCommandEntries", () => {
-  it("keeps provider skills and drops executable commands", () => {
+  it("keeps every provider command and drops client commands", () => {
     const entries = [
       { source: "client" as const, command: { name: "clear", kind: "command" } },
       { source: "provider" as const, command: { name: "compact", kind: "command" } },
@@ -130,6 +130,7 @@ describe("filterInlineSkillCommandEntries", () => {
     ];
 
     expect(filterInlineSkillCommandEntries(entries).map((entry) => entry.command.name)).toEqual([
+      "compact",
       "taste",
     ]);
   });
