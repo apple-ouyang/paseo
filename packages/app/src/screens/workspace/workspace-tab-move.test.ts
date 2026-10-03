@@ -338,65 +338,47 @@ describe("buildTabClosedLabels", () => {
 describe("decideSyncedClose", () => {
   const base = {
     tombstone: false,
-    storedTombstone: false,
     archived: false,
     pendingClosed: null as boolean | null,
     pinned: false,
-    justUnarchived: false,
-    tabOpen: false,
+    justArchived: false,
   };
 
   it("closes an archived agent nobody explicitly opened", () => {
-    expect(decideSyncedClose({ ...base, archived: true })).toEqual({
-      closed: true,
-      clearTombstone: false,
-    });
+    expect(decideSyncedClose({ ...base, archived: true })).toEqual({ closed: true });
   });
 
   it("keeps an archived agent that is pinned or just opened", () => {
-    expect(decideSyncedClose({ ...base, archived: true, pinned: true, tabOpen: true })).toEqual({
+    expect(decideSyncedClose({ ...base, archived: true, pinned: true })).toEqual({
       closed: false,
-      clearTombstone: false,
     });
     expect(decideSyncedClose({ ...base, archived: true, pendingClosed: false })).toEqual({
       closed: false,
-      clearTombstone: false,
     });
   });
 
   it("lets a user close beat a leftover pin", () => {
-    expect(
-      decideSyncedClose({ ...base, pendingClosed: true, pinned: true, tabOpen: true }),
-    ).toEqual({ closed: true, clearTombstone: false });
-    expect(decideSyncedClose({ ...base, tombstone: true, pinned: true, tabOpen: true })).toEqual({
+    expect(decideSyncedClose({ ...base, pendingClosed: true, pinned: true })).toEqual({
       closed: true,
-      clearTombstone: false,
+    });
+    expect(decideSyncedClose({ ...base, tombstone: true, pinned: true })).toEqual({
+      closed: true,
     });
   });
 
-  it("clears a stale tombstone when unarchive happens on an open tab", () => {
-    expect(
-      decideSyncedClose({
-        ...base,
-        tombstone: true,
-        storedTombstone: true,
-        justUnarchived: true,
-        tabOpen: true,
-        pinned: true,
-      }),
-    ).toEqual({ closed: false, clearTombstone: true });
+  it("closes a pinned tab when archive arrives, so a move pin cannot keep it", () => {
+    expect(decideSyncedClose({ ...base, justArchived: true, pinned: true })).toEqual({
+      closed: true,
+    });
   });
 
-  it("does not pop a closed tab open on another client when unarchive arrives", () => {
+  it("does not clear another client's close when unarchive arrives", () => {
+    expect(decideSyncedClose({ ...base, tombstone: true, pinned: true })).toEqual({
+      closed: true,
+    });
     expect(
-      decideSyncedClose({
-        ...base,
-        tombstone: true,
-        storedTombstone: true,
-        justUnarchived: true,
-        tabOpen: false,
-      }),
-    ).toEqual({ closed: true, clearTombstone: false });
+      decideSyncedClose({ ...base, tombstone: true, pendingClosed: false, pinned: true }),
+    ).toEqual({ closed: false });
   });
 });
 

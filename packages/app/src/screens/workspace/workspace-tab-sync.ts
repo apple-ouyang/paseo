@@ -156,6 +156,10 @@ export function setWorkspaceTabSyncClientResolver(
   resolver: ((serverId: string) => TabSyncClient | null) | null,
 ): void {
   clientResolver = resolver ?? defaultClientResolver;
+  // Each test installs a resolver. Drop the archive bit and in-flight writes
+  // so one case cannot make the next case treat a move-pin as a fresh open.
+  pendingLabels.clear();
+  lastArchived.clear();
 }
 
 function writeAgentLabels(serverId: string, agentId: string, labels: Record<string, string>): void {
@@ -242,60 +246,34 @@ function agentIsPinned(serverId: string, agentId: string): boolean {
   return false;
 }
 
-/** Previous archived bit, so unarchive is a transition and not a steady state. */
+/** Previous archived bit. Only the false → true edge closes a pinned moved tab. */
 const lastArchived = new Map<string, boolean>();
 
-function takeJustUnarchived(serverId: string, agentId: string, archived: boolean): boolean {
+function takeJustArchived(serverId: string, agentId: string, archived: boolean): boolean {
   const key = pendingKey(serverId, agentId);
   const seen = lastArchived.has(key);
   const wasArchived = lastArchived.get(key) === true;
   lastArchived.set(key, archived);
-  return seen && wasArchived && !archived;
-}
-
-function clearStaleCloseTombstone(
-  serverId: string,
-  agentId: string,
-  workspaceId: string | undefined,
-  stored: Record<string, string> | null,
-): void {
-  markPending(serverId, agentId, { closed: false });
-  // Spread of `Record | null` narrows to the one written key. Keep a string
-  // index so the workspace label can be restored on the same write.
-  const cleared: Record<string, string> = {
-    ...stored,
-    [TAB_CLOSED_LABEL]: "",
-  };
-  if (workspaceId) {
-    cleared[TAB_WORKSPACE_LABEL] = workspaceId;
-  }
-  writeAgentLabels(serverId, agentId, cleared);
+  return seen && !wasArchived && archived;
 }
 
 function enforceSyncedAgent(serverId: string, agentId: string, agent?: Agent): void {
   const labels = effectiveLabels(serverId, agentId);
   const workspaceId =
     typeof labels[TAB_WORKSPACE_LABEL] === "string" ? labels[TAB_WORKSPACE_LABEL] : "";
-  const stored = agentLabelsFor(serverId, agentId);
   const { workspaceKeysWithTab, tabIdByWorkspaceKey } = findAgentTabCopies(serverId, agentId);
   const archived = Boolean(agent?.archivedAt);
-  // Archive still beats a stale placement label (don't resurrect a moved tab).
-  // An explicit open — the history restore pin, or a close=false write still
-  // in flight — wins over archivedAt. Unarchive of a tab that is already open
-  // clears a stale tombstone instead of closing it.
-  const decision = decideSyncedClose({
+  // A synced close wins over pin and over an unarchive that arrived in the
+  // same update. Do not clear that label from here. Archive closes a moved
+  // tab; a history open is an in-flight `closed: false` or a pin on an agent
+  // that was already archived.
+  const closed = decideSyncedClose({
     tombstone: Boolean(labels[TAB_CLOSED_LABEL]),
-    storedTombstone: Boolean(stored?.[TAB_CLOSED_LABEL]),
     archived,
     pendingClosed: pendingClosedValue(serverId, agentId),
     pinned: agentIsPinned(serverId, agentId),
-    justUnarchived: takeJustUnarchived(serverId, agentId, archived),
-    tabOpen: workspaceKeysWithTab.length > 0,
-  });
-  const closed = decision.closed;
-  if (decision.clearTombstone) {
-    clearStaleCloseTombstone(serverId, agentId, workspaceId, stored);
-  }
+    justArchived: takeJustArchived(serverId, agentId, archived),
+  }).closed;
   if (!workspaceId && !closed) {
     return;
   }

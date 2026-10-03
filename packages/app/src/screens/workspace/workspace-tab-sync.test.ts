@@ -282,7 +282,30 @@ describe("workspace tab sync", () => {
     expect(agentTabIdsIn("ws-a")).toEqual([]);
   });
 
-  it("keeps the open tab when unarchive arrives with a stale close tombstone", () => {
+  it("closes a moved tab when the agent is archived", () => {
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_CLOSED_LABEL]: "",
+    });
+    expect(agentTabIdsIn("ws-b")).toEqual(["agent-1"]);
+    replaceAgent({
+      ...makeAgent("agent-1", {
+        [TAB_WORKSPACE_LABEL]: "ws-b",
+        [TAB_CLOSED_LABEL]: "",
+      }),
+      archivedAt: new Date("2026-04-02T00:00:00.000Z"),
+    });
+    expect(agentTabIdsIn("ws-b")).toEqual([]);
+    expect(agentTabIdsIn("ws-a")).toEqual([]);
+  });
+
+  it("does not clear another client's close when unarchive arrives", () => {
     replaceAgent({
       ...makeAgent("agent-1"),
       archivedAt: new Date("2026-04-02T00:00:00.000Z"),
@@ -293,6 +316,7 @@ describe("workspace tab sync", () => {
       intent: "reveal",
       pin: true,
     });
+    expect(agentTabIdsIn("ws-a")).toEqual(["agent-1"]);
     updateAgent.mockClear();
     replaceAgent({
       ...makeAgent("agent-1", {
@@ -301,12 +325,7 @@ describe("workspace tab sync", () => {
       }),
       archivedAt: null,
     });
-    expect(agentTabIdsIn("ws-a")).toEqual(["agent-1"]);
-    expect(updateAgent).toHaveBeenCalledWith(
-      "agent-1",
-      expect.objectContaining({
-        labels: expect.objectContaining({ [TAB_CLOSED_LABEL]: "" }),
-      }),
-    );
+    expect(agentTabIdsIn("ws-a")).toEqual([]);
+    expect(updateAgent).not.toHaveBeenCalled();
   });
 });

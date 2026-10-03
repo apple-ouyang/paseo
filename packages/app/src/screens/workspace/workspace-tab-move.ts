@@ -170,38 +170,36 @@ export function planTabOrderEnforcement(input: {
 /**
  * Whether the enforcer should close this agent's tabs.
  *
- * A user close (`pendingClosed === true`, or a tombstone with no newer open)
- * always wins. A user open (`pendingClosed === false`) and the official pin
- * keep an archived agent visible — history restore opens with `pin: true`
- * while `archivedAt` is still set. Unarchive while that tab is open clears a
- * stale tombstone instead of closing. An archived agent nobody explicitly
- * opened stays closed, so a placement label cannot resurrect it.
+ * A synced close (`tombstone`) wins over pin, archive, and a tab that is
+ * still open locally. This client must not clear that label: an unarchive
+ * update often arrives together with another client's close, and rewriting
+ * it to open would resurrect the tab everywhere. An in-flight open
+ * (`pendingClosed === false`) is the only "open is newer" signal, and the
+ * gesture already wrote the label, so the enforcer does not write it again.
+ * A history restore pins an agent that is already archived and stays open.
+ * The archive transition itself closes a moved tab — move also pins, so pin
+ * alone must not keep a tab that just became archived.
  */
 export function decideSyncedClose(input: {
   tombstone: boolean;
-  storedTombstone: boolean;
   archived: boolean;
   pendingClosed: boolean | null;
   pinned: boolean;
-  justUnarchived: boolean;
-  tabOpen: boolean;
-}): { closed: boolean; clearTombstone: boolean } {
+  justArchived: boolean;
+}): { closed: boolean } {
   if (input.pendingClosed === true) {
-    return { closed: true, clearTombstone: false };
-  }
-  if (input.justUnarchived && input.tabOpen) {
-    return { closed: false, clearTombstone: input.storedTombstone };
+    return { closed: true };
   }
   if (input.pendingClosed === false) {
-    return { closed: false, clearTombstone: false };
+    return { closed: false };
   }
-  if (input.tombstone) {
-    return { closed: true, clearTombstone: false };
+  if (input.tombstone || input.justArchived) {
+    return { closed: true };
   }
   if (input.archived && !input.pinned) {
-    return { closed: true, clearTombstone: false };
+    return { closed: true };
   }
-  return { closed: false, clearTombstone: false };
+  return { closed: false };
 }
 
 /**
