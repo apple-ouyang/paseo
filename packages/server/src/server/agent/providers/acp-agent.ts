@@ -128,6 +128,7 @@ import { withTimeout } from "../../../utils/promise-timeout.js";
 
 const ACP_AUTO_ACCEPT_FEATURE_ID = "auto_accept";
 const MAX_RELEASED_TERMINAL_OUTPUT_BYTES = 1024 * 1024;
+const MAX_DISCARDED_RELEASED_TERMINALS = 1024;
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -1686,6 +1687,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly terminalEntries = new Map<string, TerminalEntry>();
   private readonly releasedTerminalResults = new Map<string, TerminalResult>();
   private readonly pendingReleasedTerminalWrites = new Map<string, Promise<void>>();
+  private readonly discardedReleasedTerminalIds = new Set<string>();
   private readonly persistedHistory: AgentTimelineItem[] = [];
   private readonly initialHandle?: AgentPersistenceHandle;
 
@@ -2750,6 +2752,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       exit: entry.exit,
       filePath: this.releasedTerminalResultPath(cacheDir, params.terminalId),
     };
+    this.discardedReleasedTerminalIds.delete(params.terminalId);
     entry.releasedResult = result;
     entry.persistReleasedResult = () => {
       void this.persistReleasedTerminalResult(result);
@@ -3357,7 +3360,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private async persistReleasedTerminalResult(result: TerminalResult): Promise<void> {
-    if (this.closed) {
+    if (this.closed || this.discardedReleasedTerminalIds.has(result.id)) {
       return;
     }
     const previousWrite = this.pendingReleasedTerminalWrites.get(result.id) ?? Promise.resolve();
@@ -3418,7 +3421,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private async loadReleasedTerminalResult(terminalId: string): Promise<void> {
-    if (this.releasedTerminalResults.has(terminalId)) {
+    if (
+      this.releasedTerminalResults.has(terminalId) ||
+      this.discardedReleasedTerminalIds.has(terminalId)
+    ) {
       return;
     }
     await this.pendingReleasedTerminalWrites.get(terminalId)?.catch(() => undefined);
@@ -3459,6 +3465,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private async discardReleasedTerminalResult(terminalId: string): Promise<void> {
+    if (this.discardedReleasedTerminalIds.size >= MAX_DISCARDED_RELEASED_TERMINALS) {
+      const oldest = this.discardedReleasedTerminalIds.values().next().value;
+      if (oldest) {
+        this.discardedReleasedTerminalIds.delete(oldest);
+      }
+    }
+    this.discardedReleasedTerminalIds.add(terminalId);
     await this.pendingReleasedTerminalWrites.get(terminalId)?.catch(() => undefined);
     this.releasedTerminalResults.delete(terminalId);
     const cacheDir = this.releasedTerminalCacheDir;
@@ -3471,6 +3484,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     await Promise.allSettled(this.pendingReleasedTerminalWrites.values());
     this.pendingReleasedTerminalWrites.clear();
     this.releasedTerminalResults.clear();
+    this.discardedReleasedTerminalIds.clear();
     const cacheDir = this.releasedTerminalCacheDir ?? (await this.releasedTerminalCacheDirPromise);
     if (cacheDir) {
       await fs.rm(cacheDir, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -94,7 +94,6 @@ describe("buildACPClientCapabilities", () => {
 
 interface ACPSessionInternals {
   sessionId: string | null;
-  releasedTerminalCacheDir: string | null;
   connection: { prompt: (...args: unknown[]) => Promise<PromptResponse> };
   activeForegroundTurnId: string | null;
   configOptions: SessionConfigOption[];
@@ -990,7 +989,18 @@ describe("ACP tool-call detail mapping", () => {
 
     await session.close();
     child.stdout!.emit("data", "late-after-close\n");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const unhandledRejection = new Promise<unknown>((resolve) => {
+      const handler = (reason: unknown) => {
+        process.off("unhandledRejection", handler);
+        resolve(reason);
+      };
+      process.once("unhandledRejection", handler);
+      setImmediate(() => {
+        process.off("unhandledRejection", handler);
+        resolve(undefined);
+      });
+    });
+    await expect(unhandledRejection).resolves.toBeUndefined();
   });
 
   test("cleans released terminal results after failed tool calls", async () => {
@@ -1001,6 +1011,10 @@ describe("ACP tool-call detail mapping", () => {
     });
     const internals = asInternals<ACPSessionInternals>(session);
     internals.sessionId = "session-1";
+    const items: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "tool_call") items.push(event.item);
+    });
 
     const { terminalId } = await session.createTerminal({
       sessionId: "session-1",
@@ -1010,11 +1024,6 @@ describe("ACP tool-call detail mapping", () => {
     child.emit("exit", 1, null);
     await session.waitForTerminalExit({ sessionId: "session-1", terminalId });
     await session.releaseTerminal({ sessionId: "session-1", terminalId });
-
-    const cacheDir = internals.releasedTerminalCacheDir;
-    expect(cacheDir).toBeTruthy();
-    const resultPath = path.join(cacheDir!, `${encodeURIComponent(terminalId)}.json`);
-    await expect(access(resultPath)).resolves.toBeUndefined();
 
     await session.sessionUpdate({
       sessionId: "session-1",
@@ -1036,7 +1045,21 @@ describe("ACP tool-call detail mapping", () => {
       } as SessionUpdate,
     });
 
-    await expect(access(resultPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(items.at(-1)).toMatchObject({
+      status: "failed",
+      detail: { type: "shell", output: "failed-output\n", exitCode: 1 },
+    });
+    child.stdout!.emit("data", "late-after-failure\n");
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "failed-call",
+        status: "failed",
+      } as SessionUpdate,
+    });
+    expect(items.at(-1)).toMatchObject({ status: "failed", detail: { type: "shell" } });
+    expect((items.at(-1) as { detail: { output?: string } }).detail.output).toBeUndefined();
     await session.close();
   });
 
