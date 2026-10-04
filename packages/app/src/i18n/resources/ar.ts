@@ -286,6 +286,7 @@ export const ar: TranslationResources = {
       archived: "المؤرشفة",
       emptyArchived: "لا توجد جلسات مؤرشفة",
       emptyActive: "لا توجد جلسات غير مؤرشفة",
+      emptyLoaded: "لا توجد نتائج في الصفحات المحمّلة",
     },
     actions: {
       loadMore: "تحميل المزيد",

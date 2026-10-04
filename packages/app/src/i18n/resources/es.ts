@@ -291,6 +291,7 @@ export const es: TranslationResources = {
       archived: "Archivadas",
       emptyArchived: "No hay sesiones archivadas",
       emptyActive: "No hay sesiones sin archivar",
+      emptyLoaded: "No hay coincidencias en las páginas cargadas",
     },
     actions: {
       loadMore: "Cargar más",

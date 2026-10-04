@@ -167,7 +167,7 @@ function SessionsScreenContent() {
     return (
       <View style={styles.footer}>
         <Button variant="ghost" onPress={loadMore} disabled={isLoadingMore}>
-          {isLoadingMore ? "Loading..." : t("sessions.actions.loadMore")}
+          {isLoadingMore ? t("common.loading") : t("sessions.actions.loadMore")}
         </Button>
       </View>
     );
@@ -246,7 +246,7 @@ function SessionsScreenContent() {
               disabled={isLoadingMore}
               testID="sessions-empty-load-more"
             >
-              {isLoadingMore ? "Loading..." : t("sessions.actions.loadMore")}
+              {isLoadingMore ? t("common.loading") : t("sessions.actions.loadMore")}
             </Button>
           ) : null}
         </View>

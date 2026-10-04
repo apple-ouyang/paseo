@@ -287,6 +287,7 @@ export const ko: TranslationResources = {
       archived: "보관됨",
       emptyArchived: "보관된 세션이 없습니다",
       emptyActive: "보관되지 않은 세션이 없습니다",
+      emptyLoaded: "불러온 페이지에 일치 항목이 없습니다",
     },
     actions: {
       loadMore: "더 불러오기",

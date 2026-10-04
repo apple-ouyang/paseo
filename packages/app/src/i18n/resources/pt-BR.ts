@@ -290,6 +290,7 @@ export const ptBR: TranslationResources = {
       archived: "Arquivadas",
       emptyArchived: "Nenhuma sessão arquivada",
       emptyActive: "Nenhuma sessão não arquivada",
+      emptyLoaded: "Nenhuma correspondência nas páginas carregadas",
     },
     actions: {
       loadMore: "Carregar mais",

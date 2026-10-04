@@ -290,6 +290,7 @@ export const ru: TranslationResources = {
       archived: "В архиве",
       emptyArchived: "Нет сессий в архиве",
       emptyActive: "Нет сессий вне архива",
+      emptyLoaded: "Совпадений на загруженных страницах нет",
     },
     actions: {
       loadMore: "Загрузить ещё",

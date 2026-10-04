@@ -76,7 +76,7 @@ describe("resolveSessionsEmptyText", () => {
         archivedFilter: "archived",
         hasMore: true,
       }),
-    ).toBe("sessions.noMatches");
+    ).toBe("sessions.archivedFilter.emptyLoaded");
     expect(
       resolveSessionsEmptyText({
         t,
@@ -85,7 +85,7 @@ describe("resolveSessionsEmptyText", () => {
         archivedFilter: "active",
         hasMore: true,
       }),
-    ).toBe("sessions.noMatches");
+    ).toBe("sessions.archivedFilter.emptyLoaded");
   });
 
   it("falls back to the plain empty text without a query or a filter", () => {

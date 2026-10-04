@@ -38,12 +38,12 @@ export function resolveSessionsEmptyText(input: {
   }
   if (input.archivedFilter === "archived") {
     return input.hasMore
-      ? input.t("sessions.noMatches")
+      ? input.t("sessions.archivedFilter.emptyLoaded")
       : input.t("sessions.archivedFilter.emptyArchived");
   }
   if (input.archivedFilter === "active") {
     return input.hasMore
-      ? input.t("sessions.noMatches")
+      ? input.t("sessions.archivedFilter.emptyLoaded")
       : input.t("sessions.archivedFilter.emptyActive");
   }
   if (input.isAllHosts) {

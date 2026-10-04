@@ -286,6 +286,7 @@ export const zhCN: TranslationResources = {
       archived: "已归档",
       emptyArchived: "没有已归档的会话",
       emptyActive: "没有未归档的会话",
+      emptyLoaded: "已加载的页面里没有匹配项",
     },
     actions: {
       loadMore: "加载更多",

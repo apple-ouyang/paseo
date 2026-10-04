@@ -283,6 +283,7 @@ export const en = {
       archived: "Archived",
       emptyArchived: "No archived sessions",
       emptyActive: "No unarchived sessions",
+      emptyLoaded: "No matches in the pages loaded so far",
     },
     actions: {
       loadMore: "Load more",

@@ -291,6 +291,7 @@ export const ja: TranslationResources = {
       archived: "アーカイブ済み",
       emptyArchived: "アーカイブ済みのセッションはありません",
       emptyActive: "未アーカイブのセッションはありません",
+      emptyLoaded: "読み込み済みのページに一致はありません",
     },
     actions: {
       loadMore: "さらに読み込む",
