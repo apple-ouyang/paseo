@@ -4060,7 +4060,8 @@ export class AgentManager {
     // goes back; a successful one is refilled by the replay through
     // `recordTimeline`.
     const previousPreview = agent.previewMessages;
-    agent.previewMessages = [];
+    const hiddenPreview: AgentMessagePreview[] = [];
+    agent.previewMessages = hiddenPreview;
     const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
     const providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
     try {
@@ -4078,7 +4079,12 @@ export class AgentManager {
         }
       }
     } catch (error) {
-      agent.previewMessages = previousPreview;
+      // Another replacement may have refilled the preview while this read ran —
+      // overlapping rewinds are the case. Only restore the snapshot this call
+      // took, and only while it is still the one in place.
+      if (agent.previewMessages === hiddenPreview) {
+        agent.previewMessages = previousPreview;
+      }
       throw error;
     }
 

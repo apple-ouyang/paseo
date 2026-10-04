@@ -872,6 +872,76 @@ test("a failed history read keeps the preview the surviving timeline explains", 
   }
 });
 
+test("a failed history read does not clobber a preview a newer replay wrote", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-preview-overlap-"));
+  let readCount = 0;
+  let releaseFirstRead: (() => void) | null = null;
+  let announceFirstRead: (() => void) | null = null;
+  const firstReadStarted = new Promise<void>((resolve) => {
+    announceFirstRead = resolve;
+  });
+  class HistorySession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      readCount += 1;
+      const isFirstRead = readCount === 1;
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "user_message", text: isFirstRead ? "old kumquat question" : "fresh start" },
+      };
+      if (isFirstRead) {
+        // Hold the first (failing) read open while a second replacement runs.
+        announceFirstRead?.();
+        await new Promise<void>((resolve) => {
+          releaseFirstRead = resolve;
+        });
+        throw new Error("provider history read failed");
+      }
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "kept" },
+      };
+    }
+  }
+  class HistoryClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new HistorySession(config);
+    }
+
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return new HistorySession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  }
+  const manager = new AgentManager({ clients: { codex: new HistoryClient() }, logger });
+  let agentId: string | null = null;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+
+    const failingRewrite = manager.hydrateTimelineFromProvider(agent.id, { force: true });
+    await firstReadStarted;
+    const resumeFirstRead = releaseFirstRead as (() => void) | null;
+    expect(resumeFirstRead).not.toBeNull();
+
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true, broadcast: true });
+    resumeFirstRead?.();
+    await expect(failingRewrite).rejects.toThrow("provider history read failed");
+
+    expect(
+      (manager.listMessagePreviews().get(agent.id) ?? []).map((message) => message.text),
+    ).toEqual(["fresh start", "kept"]);
+  } finally {
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("a live agent with nothing to preview still reports an empty preview", async () => {
   // The history search merges these over the stored records, so an emptied
   // preview has to be present to mask the copy a rewind has not overwritten yet.
