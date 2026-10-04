@@ -4070,6 +4070,10 @@ export class AgentManager {
     await this.deleteCommittedTimeline(agent.id);
     this.timelineStore.delete(agent.id);
     this.timelineStore.initialize(agent.id, { timestamp: new Date().toISOString() });
+    // The timeline is being replaced, so anything the old one contributed to the
+    // preview is gone too — including turns a rewind just deleted. The replay
+    // below refills it through `recordTimeline`.
+    agent.previewMessages = [];
     agent.historyPrimed = true;
 
     for (const event of this.providerSubagents.deleteParent(agent.id)) {

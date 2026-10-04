@@ -756,6 +756,66 @@ test("refreshing an agent replaces the injected timeline store instead of append
   }
 });
 
+test("replacing the timeline drops messages that are no longer in it", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-preview-replace-"));
+  let history: AgentStreamEvent[] = [
+    {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "user_message", text: "keep the kumquat plan" },
+    },
+    { type: "timeline", provider: "codex", item: { type: "assistant_message", text: "noted" } },
+  ];
+  class HistorySession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      for (const event of history) {
+        yield event;
+      }
+    }
+  }
+  class HistoryClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new HistorySession(config);
+    }
+
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return new HistorySession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  }
+  const manager = new AgentManager({ clients: { codex: new HistoryClient() }, logger });
+  let agentId: string | null = null;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true, broadcast: true });
+    expect(
+      (manager.listMessagePreviews().get(agent.id) ?? []).map((message) => message.text),
+    ).toEqual(["keep the kumquat plan", "noted"]);
+
+    // What a rewind does: the provider now reports a history without that turn.
+    history = [
+      {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "fresh start" },
+      },
+    ];
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true, broadcast: true });
+
+    const preview = manager.listMessagePreviews().get(agent.id) ?? [];
+    expect(preview.map((message) => message.text)).toEqual(["fresh start"]);
+    expect(preview.some((message) => message.text.includes("kumquat"))).toBe(false);
+  } finally {
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("a failed history replay leaves the committed timeline intact", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-timeline-replay-fail-"));
   const store = new RecordingTimelineStore();
