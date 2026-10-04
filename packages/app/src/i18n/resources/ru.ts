@@ -284,6 +284,13 @@ export const ru: TranslationResources = {
     tooManyMatches: "Слишком много совпадений — уточните запрос",
     hostLoadFailed: "{{host}}: не удалось загрузить историю",
     searchPlaceholder: "Поиск по истории",
+    archivedFilter: {
+      all: "Все",
+      active: "Не в архиве",
+      archived: "В архиве",
+      emptyArchived: "Нет сессий в архиве",
+      emptyActive: "Нет сессий вне архива",
+    },
     actions: {
       loadMore: "Загрузить ещё",
       clearSearch: "Очистить поиск",
