@@ -150,6 +150,12 @@ function effectiveLabels(serverId: string, agentId: string): Record<string, stri
  * through {@link effectiveLabels}, so a just-opened tab still moves.
  */
 export function isAgentTabClosedBySync(serverId: string, agentId: string): boolean {
+  // A stored tombstone is a close that already happened: a local pending open
+  // must not mask it, or a gesture that started before the close would still
+  // resurrect the tab during the pending-label window.
+  if (agentLabelsFor(serverId, agentId)?.[TAB_CLOSED_LABEL]) {
+    return true;
+  }
   return Boolean(effectiveLabels(serverId, agentId)[TAB_CLOSED_LABEL]);
 }
 

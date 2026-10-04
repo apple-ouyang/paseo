@@ -254,13 +254,12 @@ describe("workspace tab sync", () => {
       intent: "reveal",
       pin: true,
     });
-    // Another client closed the tab while the move gesture was still open.
+    // The tombstone lands while the open's pending `closed: false` is still
+    // live; the stored close has to win over the local pending open.
     setAgentLabels("agent-1", {
       [TAB_WORKSPACE_LABEL]: "ws-a",
       [TAB_CLOSED_LABEL]: "1",
     });
-    // Let the open intent's pending TTL lapse so the stored tombstone governs.
-    vi.advanceTimersByTime(16_000);
     const moved = moveAgentTabToWorkspace({
       serverId: SERVER,
       sourceWorkspaceKey: workspaceKey("ws-a"),
