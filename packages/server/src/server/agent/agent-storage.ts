@@ -52,6 +52,14 @@ const STORED_AGENT_SCHEMA = z.object({
   lastActivityAt: z.string().optional(),
   lastUserMessageAt: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
+  /**
+   * The newest messages, bounded by message-preview.ts. History search matches
+   * this so a phrase remembered from the conversation still finds the session.
+   * Records written before this field existed simply have none.
+   */
+  previewMessages: z
+    .array(z.object({ role: z.enum(["user", "assistant"]), text: z.string() }))
+    .optional(),
   labels: z.record(z.string(), z.string()).default({}),
   lastStatus: AgentStatusSchema.default("closed"),
   lastModeId: z.string().nullable().optional(),

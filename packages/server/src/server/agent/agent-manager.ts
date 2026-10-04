@@ -1,4 +1,9 @@
 import { projectTimelineRows } from "./timeline-projection.js";
+import {
+  buildMessagePreview,
+  MESSAGE_PREVIEW_SCAN_LIMIT,
+  type AgentMessagePreview,
+} from "./message-preview.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
@@ -423,6 +428,8 @@ interface ManagedAgentBase {
   persistence: AgentPersistenceHandle | null;
   historyPrimed: boolean;
   lastUserMessageAt: Date | null;
+  /** Newest messages, bounded; History search matches them. */
+  previewMessages: AgentMessagePreview[];
   activeTurnId: string | null;
   activeTurnStartedAt: Date | null;
   lastUsage?: AgentUsage;
@@ -1590,6 +1597,7 @@ export class AgentManager {
         createdAt: existing.createdAt,
         updatedAt: existing.updatedAt,
         lastUserMessageAt: existing.lastUserMessageAt,
+        previewMessages: existing.previewMessages,
         historyPrimed: rehydrateFromDisk ? false : preservedHistoryPrimed,
         lastUsage: preservedLastUsage,
         lastError: preservedLastError,
@@ -1906,6 +1914,7 @@ export class AgentManager {
         persistence: record.persistence ?? null,
         historyPrimed: true,
         lastUserMessageAt: record.lastUserMessageAt ? new Date(record.lastUserMessageAt) : null,
+        previewMessages: record.previewMessages ?? [],
         lastUsage: undefined,
         lastError: record.lastError ?? undefined,
         attention,
@@ -3447,6 +3456,7 @@ export class AgentManager {
       createdAt?: Date;
       updatedAt?: Date;
       lastUserMessageAt?: Date | null;
+      previewMessages?: AgentMessagePreview[];
       labels?: Record<string, string>;
       timeline?: AgentTimelineItem[];
       timelineRows?: AgentTimelineRow[];
@@ -3494,6 +3504,7 @@ export class AgentManager {
         config,
         now,
         durableTimelineHasRows,
+        previewMessages: options?.previewMessages ?? [],
         options,
       });
 
@@ -3629,6 +3640,7 @@ export class AgentManager {
     config: AgentSessionConfig;
     now: Date;
     durableTimelineHasRows: boolean;
+    previewMessages: AgentMessagePreview[];
     options:
       | {
           createdAt?: Date;
@@ -3645,7 +3657,15 @@ export class AgentManager {
         }
       | undefined;
   }): ActiveManagedAgent {
-    const { resolvedAgentId, session, config, now, durableTimelineHasRows, options } = params;
+    const {
+      resolvedAgentId,
+      session,
+      config,
+      now,
+      durableTimelineHasRows,
+      previewMessages,
+      options,
+    } = params;
     return {
       id: resolvedAgentId,
       provider: config.provider,
@@ -3677,6 +3697,7 @@ export class AgentManager {
       ),
       historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
       lastUserMessageAt: options?.lastUserMessageAt ?? null,
+      previewMessages,
       lastUsage: options?.lastUsage,
       lastError: options?.lastError,
       attention: resolveInitialAttention(options?.attention),
@@ -4830,6 +4851,16 @@ export class AgentManager {
     item = limitAgentTimelineItemContent(item);
     const row = this.timelineStore.append(agentId, item, options);
     this.enqueueDurableTimelineAppend(agentId, row);
+    if (item.type === "user_message" || item.type === "assistant_message") {
+      // Refreshed on append rather than at persist time: reads only the recent
+      // tail, and only for the two item types that can change the preview.
+      const agent = this.agents.get(agentId);
+      if (agent) {
+        agent.previewMessages = buildMessagePreview(
+          this.timelineStore.getRecentItems(agentId, MESSAGE_PREVIEW_SCAN_LIMIT),
+        );
+      }
+    }
     return row;
   }
 

@@ -94,6 +94,7 @@ function createManagedAgent(overrides: ManagedAgentOverrides = {}): ManagedAgent
     lastError: lastErrorValue,
     historyPrimed: true,
     lastUserMessageAt: now,
+    previewMessages: overrides.previewMessages ?? [],
     attention: { requiresAttention: false },
   };
 
@@ -526,5 +527,21 @@ describe("toRecentProviderSessionDescriptorPayload", () => {
       firstPromptPreview: null,
       lastPromptPreview: null,
     });
+  });
+});
+
+describe("stored message preview", () => {
+  it("projects the newest messages into the stored record", () => {
+    const previewMessages = [
+      { role: "user" as const, text: "please rename the legacy importer" },
+      { role: "assistant" as const, text: "I renamed it and updated its callers" },
+    ];
+    expect(toStoredAgentRecord(createManagedAgent({ previewMessages })).previewMessages).toEqual(
+      previewMessages,
+    );
+  });
+
+  it("omits the field when there is nothing to search", () => {
+    expect(toStoredAgentRecord(createManagedAgent()).previewMessages).toBeUndefined();
   });
 });
