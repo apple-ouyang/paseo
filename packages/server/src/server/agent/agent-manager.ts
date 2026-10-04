@@ -1188,15 +1188,16 @@ export class AgentManager {
   }
 
   /**
-   * The live message previews. A recorded message lands here before its queued
-   * record write, so a search during that gap still finds what was just said.
+   * The live message previews, including agents with nothing to preview: an
+   * emptied preview has to mask the stored copy, or a rewind would keep the
+   * deleted turns searchable until the record write catches up. A recorded
+   * message also lands here before its queued write, so a search during that gap
+   * still finds what was just said.
    */
   listMessagePreviews(): Map<string, AgentMessagePreview[]> {
     const byId = new Map<string, AgentMessagePreview[]>();
     for (const [id, agent] of this.agents) {
-      if (agent.previewMessages.length > 0) {
-        byId.set(id, agent.previewMessages);
-      }
+      byId.set(id, agent.previewMessages);
     }
     return byId;
   }
@@ -4053,6 +4054,10 @@ export class AgentManager {
     broadcast: boolean,
     broadcastTimeline: boolean,
   ): Promise<void> {
+    // Cleared before the provider history is collected, not after: the timeline is
+    // about to be replaced, and a search during the (async) read must not find a
+    // turn a rewind just deleted. The replay refills it through `recordTimeline`.
+    agent.previewMessages = [];
     const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
     const providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
     for await (const rawEvent of agent.session.streamHistory()) {
@@ -4070,10 +4075,6 @@ export class AgentManager {
     await this.deleteCommittedTimeline(agent.id);
     this.timelineStore.delete(agent.id);
     this.timelineStore.initialize(agent.id, { timestamp: new Date().toISOString() });
-    // The timeline is being replaced, so anything the old one contributed to the
-    // preview is gone too — including turns a rewind just deleted. The replay
-    // below refills it through `recordTimeline`.
-    agent.previewMessages = [];
     agent.historyPrimed = true;
 
     for (const event of this.providerSubagents.deleteParent(agent.id)) {

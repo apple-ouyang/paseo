@@ -3204,6 +3204,68 @@ test("fetch_agent_history_request reads a live message preview before its record
   });
 });
 
+test("fetch_agent_history_request lets an emptied live preview hide a stale record", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const historyCwd = path.resolve("/tmp/history-emptied-preview");
+  const project = createPersistedProjectRecord({
+    projectId: "proj-emptied-preview",
+    rootPath: historyCwd,
+    kind: "non_git",
+    displayName: "emptied-preview",
+    createdAt: "2026-03-01T12:00:00.000Z",
+    updatedAt: "2026-03-01T12:00:00.000Z",
+  });
+  const workspace = createPersistedWorkspaceRecord({
+    workspaceId: "ws-emptied-preview",
+    projectId: project.projectId,
+    cwd: historyCwd,
+    kind: "directory",
+    displayName: "emptied-preview",
+    createdAt: "2026-03-01T12:00:00.000Z",
+    updatedAt: "2026-03-01T12:00:00.000Z",
+  });
+  const session = createSessionForWorkspaceTests({
+    // A rewind cleared the preview in memory; the record write is still queued.
+    agentStorage: {
+      list: async () => [
+        {
+          id: "rewound",
+          previewMessages: [{ role: "user", text: "the deleted kumquat question" }],
+        },
+      ],
+    },
+    agentManager: { listMessagePreviews: () => new Map([["rewound", []]]) },
+  });
+
+  session.emit = (message) => {
+    if (isSessionOutboundMessage(message)) emitted.push(message);
+  };
+  session.projectRegistry.get = async () => project;
+  session.workspaceRegistry.list = async () => [workspace];
+  session.workspaceRegistry.get = async () => workspace;
+  session.listAgentPayloads = async () => [
+    {
+      ...makeAgent({
+        id: "rewound",
+        cwd: historyCwd,
+        workspaceId: "ws-emptied-preview",
+        status: "idle",
+        updatedAt: "2026-03-02T12:00:00.000Z",
+      }),
+      title: "Quarterly review",
+    },
+  ];
+
+  await session.handleMessage({
+    type: "fetch_agent_history_request",
+    requestId: "req-emptied-preview",
+    search: "kumquat",
+  });
+
+  const response = filterByType(emitted, "fetch_agent_history_response")[0];
+  expect(response.payload.entries).toEqual([]);
+});
+
 test("fetch_agent_history_request rejects a malformed search cursor", async () => {
   const emitted: SessionOutboundMessage[] = [];
   const session = createSessionForWorkspaceTests();
