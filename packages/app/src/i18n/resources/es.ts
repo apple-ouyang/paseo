@@ -260,6 +260,13 @@ export const es: TranslationResources = {
     tooManyMatches: "Demasiadas coincidencias: acota la búsqueda",
     hostLoadFailed: "{{host}}: No se pudo cargar el historial",
     searchPlaceholder: "Buscar en el historial",
+    archivedFilter: {
+      all: "Todas",
+      active: "Sin archivar",
+      archived: "Archivadas",
+      emptyArchived: "No hay sesiones archivadas",
+      emptyActive: "No hay sesiones sin archivar",
+    },
     actions: {
       loadMore: "Cargar más",
       clearSearch: "Borrar búsqueda",

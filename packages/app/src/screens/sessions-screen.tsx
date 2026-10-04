@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { AgentList } from "@/components/agent-list";
 import { SearchField } from "@/components/ui/search-field";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { HostFilter } from "@/components/hosts/host-filter";
 import { ALL_HOSTS_OPTION_ID } from "@/components/hosts/host-picker";
 import { type AgentHistoryHostError, useAgentHistory } from "@/hooks/use-agent-history";
@@ -18,6 +19,11 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useImportSession } from "@/hooks/use-import-session";
 import { useHosts } from "@/runtime/host-runtime";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
+import {
+  filterAgentsByArchivedState,
+  resolveSessionsEmptyText,
+  type SessionsArchivedFilter,
+} from "./sessions-screen-state";
 
 /** Long enough that a typed word is one request, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 200;
@@ -49,17 +55,6 @@ function SessionHostErrorsBanner({
   );
 }
 
-/** An empty list means something different once a query is narrowing it. */
-function resolveEmptyText(input: {
-  t: TFunction;
-  isSearching: boolean;
-  isAllHosts: boolean;
-}): string {
-  if (input.isSearching) return input.t("sessions.noMatches");
-  if (input.isAllHosts) return input.t("sessions.empty");
-  return "No sessions for this host";
-}
-
 export function SessionsScreen() {
   const isFocused = useIsFocused();
 
@@ -77,6 +72,7 @@ function SessionsScreenContent() {
   const hosts = useHosts();
   const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
   const [searchInput, setSearchInput] = useState("");
+  const [archivedFilter, setArchivedFilter] = useState<SessionsArchivedFilter>("all");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
   const historyServerId = selectedHost === ALL_HOSTS_OPTION_ID ? null : selectedHost;
   const {
@@ -96,6 +92,32 @@ function SessionsScreenContent() {
     search,
   });
   const isSearching = isSearchSupported && search.length > 0;
+  const visibleAgents = useMemo(
+    () => filterAgentsByArchivedState(agents, archivedFilter),
+    [agents, archivedFilter],
+  );
+  // The archived filter is client-side, so it answers even on a host whose
+  // history endpoint predates search; the row is not search-only.
+  const archivedFilterOptions = useMemo(
+    () => [
+      {
+        value: "all" as const,
+        label: t("sessions.archivedFilter.all"),
+        testID: "sessions-archived-filter-all",
+      },
+      {
+        value: "active" as const,
+        label: t("sessions.archivedFilter.active"),
+        testID: "sessions-archived-filter-active",
+      },
+      {
+        value: "archived" as const,
+        label: t("sessions.archivedFilter.archived"),
+        testID: "sessions-archived-filter-archived",
+      },
+    ],
+    [t],
+  );
 
   useEffect(() => {
     if (
@@ -114,13 +136,13 @@ function SessionsScreenContent() {
   }, [refreshAll]);
 
   // `useAgentHistory` owns the order: recency at rest, relevance under a query.
-  const emptyText = resolveEmptyText({
+  const emptyText = resolveSessionsEmptyText({
     t,
     isSearching,
     isAllHosts: selectedHost === ALL_HOSTS_OPTION_ID,
+    archivedFilter,
   });
   const showHostFilter = hosts.length > 1;
-  const showFilterRow = showHostFilter || isSearchSupported;
   const showLoadError = isError && agents.length === 0;
 
   const handleBack = useCallback(() => {
@@ -154,29 +176,36 @@ function SessionsScreenContent() {
   return (
     <View style={styles.container}>
       <MenuHeader title={t("sessions.title")} />
-      {showFilterRow ? (
-        <View style={styles.filterContainer}>
-          {isSearchSupported ? (
-            <SearchField
-              value={searchInput}
-              onChangeText={setSearchInput}
-              placeholder={t("sessions.searchPlaceholder")}
-              clearAccessibilityLabel={t("sessions.actions.clearSearch")}
-              testID="sessions-search-input"
-              clearTestID="sessions-search-clear"
-            />
-          ) : null}
-          {showHostFilter ? (
-            <HostFilter
-              hosts={hosts}
-              selectedHost={selectedHost}
-              onSelectHost={setSelectedHost}
-              triggerTestID="sessions-host-filter-trigger"
-              hostOptionTestID={sessionsHostOptionTestID}
-            />
-          ) : null}
-        </View>
-      ) : null}
+      {/* The row always renders: the archived filter is client-side, so it is
+          useful even where history search is not supported. */}
+      <View style={styles.filterContainer}>
+        {isSearchSupported ? (
+          <SearchField
+            value={searchInput}
+            onChangeText={setSearchInput}
+            placeholder={t("sessions.searchPlaceholder")}
+            clearAccessibilityLabel={t("sessions.actions.clearSearch")}
+            testID="sessions-search-input"
+            clearTestID="sessions-search-clear"
+          />
+        ) : null}
+        {showHostFilter ? (
+          <HostFilter
+            hosts={hosts}
+            selectedHost={selectedHost}
+            onSelectHost={setSelectedHost}
+            triggerTestID="sessions-host-filter-trigger"
+            hostOptionTestID={sessionsHostOptionTestID}
+          />
+        ) : null}
+        <SegmentedControl
+          size="sm"
+          value={archivedFilter}
+          onValueChange={setArchivedFilter}
+          options={archivedFilterOptions}
+          testID="sessions-archived-filter"
+        />
+      </View>
       {hostErrors.length > 0 ? <SessionHostErrorsBanner errors={hostErrors} t={t} /> : null}
       {isInitialLoad ? (
         <View style={styles.loadingContainer}>
@@ -191,7 +220,7 @@ function SessionsScreenContent() {
           </Button>
         </View>
       ) : null}
-      {!isInitialLoad && !showLoadError && agents.length === 0 ? (
+      {!isInitialLoad && !showLoadError && visibleAgents.length === 0 ? (
         <View style={styles.emptyContainer} testID="sessions-empty">
           <Text style={styles.emptyText}>{emptyText}</Text>
           {isSearching ? (
@@ -208,9 +237,9 @@ function SessionsScreenContent() {
           </Button>
         </View>
       ) : null}
-      {!isInitialLoad && !showLoadError && agents.length > 0 ? (
+      {!isInitialLoad && !showLoadError && visibleAgents.length > 0 ? (
         <AgentList
-          agents={agents}
+          agents={visibleAgents}
           showCheckoutInfo={false}
           isRefreshing={isManualRefresh}
           onRefresh={handleRefresh}

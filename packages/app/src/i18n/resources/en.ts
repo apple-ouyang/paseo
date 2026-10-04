@@ -254,6 +254,13 @@ export const en = {
     tooManyMatches: "Too many matches — narrow your search",
     hostLoadFailed: "{{host}}: Could not load history",
     searchPlaceholder: "Search history",
+    archivedFilter: {
+      all: "All",
+      active: "Unarchived",
+      archived: "Archived",
+      emptyArchived: "No archived sessions",
+      emptyActive: "No unarchived sessions",
+    },
     actions: {
       loadMore: "Load more",
       clearSearch: "Clear search",
