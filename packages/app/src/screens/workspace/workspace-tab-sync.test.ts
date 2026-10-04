@@ -247,6 +247,32 @@ describe("workspace tab sync", () => {
     expect(agentTabIdsIn("ws-a")).toEqual([]);
   });
 
+  it("refuses to move a tab whose close tombstone landed first", () => {
+    const tabId = layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    // Another client closed the tab while the move gesture was still open.
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "1",
+    });
+    // Let the open intent's pending TTL lapse so the stored tombstone governs.
+    vi.advanceTimersByTime(16_000);
+    const moved = moveAgentTabToWorkspace({
+      serverId: SERVER,
+      sourceWorkspaceKey: workspaceKey("ws-a"),
+      targetWorkspaceKey: workspaceKey("ws-b"),
+      targetWorkspaceId: "ws-b",
+      agentId: "agent-1",
+      tabId: tabId!,
+    });
+    expect(moved).toBe(false);
+    expect(agentTabIdsIn("ws-b")).toEqual([]);
+  });
+
   it("keeps a history-opened archived agent tab open", () => {
     replaceAgent({
       ...makeAgent("agent-1"),

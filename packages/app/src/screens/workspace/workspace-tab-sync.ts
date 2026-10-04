@@ -142,6 +142,17 @@ function effectiveLabels(serverId: string, agentId: string): Record<string, stri
   return mergePendingTabLabels(current, live);
 }
 
+/**
+ * Whether the synced labels currently say this agent's tab is closed. A close
+ * that lands while a drag gesture or a move menu is open must win over the
+ * gesture: completing the move would clear the tombstone and resurrect a tab
+ * the user (or another client) just closed. Local pending opens are included
+ * through {@link effectiveLabels}, so a just-opened tab still moves.
+ */
+export function isAgentTabClosedBySync(serverId: string, agentId: string): boolean {
+  return Boolean(effectiveLabels(serverId, agentId)[TAB_CLOSED_LABEL]);
+}
+
 interface TabSyncClient {
   updateAgent(agentId: string, updates: { labels: Record<string, string> }): unknown;
 }
@@ -483,6 +494,12 @@ export function moveAgentTabToWorkspace(input: {
   agentId: string;
   tabId: string;
 }): boolean {
+  // The gesture may predate a close that has since landed (a drag started
+  // before another client closed the tab, or a menu opened on a tab that is
+  // now closed). Moving would write `closed: ""` and reopen it everywhere.
+  if (isAgentTabClosedBySync(input.serverId, input.agentId)) {
+    return false;
+  }
   const store = activeWorkspaceLayoutStore.getState();
   let moved = false;
   internalSync = true;
