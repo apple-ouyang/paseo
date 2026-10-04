@@ -254,12 +254,13 @@ describe("workspace tab sync", () => {
       intent: "reveal",
       pin: true,
     });
-    // The tombstone lands while the open's pending `closed: false` is still
-    // live; the stored close has to win over the local pending open.
+    // Another client closed the tab while the move gesture was still open.
     setAgentLabels("agent-1", {
       [TAB_WORKSPACE_LABEL]: "ws-a",
       [TAB_CLOSED_LABEL]: "1",
     });
+    // Let the open intent's pending TTL lapse so the stored tombstone governs.
+    vi.advanceTimersByTime(16_000);
     const moved = moveAgentTabToWorkspace({
       serverId: SERVER,
       sourceWorkspaceKey: workspaceKey("ws-a"),
@@ -270,6 +271,32 @@ describe("workspace tab sync", () => {
     });
     expect(moved).toBe(false);
     expect(agentTabIdsIn("ws-b")).toEqual([]);
+  });
+
+  it("still moves a tab that was just reopened while the echo is in flight", () => {
+    // The stored tombstone is older than the local reopen: the reopen's
+    // `closed: false` write has not echoed back yet.
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "1",
+    });
+    echoWrites = false;
+    const tabId = layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    const moved = moveAgentTabToWorkspace({
+      serverId: SERVER,
+      sourceWorkspaceKey: workspaceKey("ws-a"),
+      targetWorkspaceKey: workspaceKey("ws-b"),
+      targetWorkspaceId: "ws-b",
+      agentId: "agent-1",
+      tabId: tabId!,
+    });
+    expect(moved).toBe(true);
+    expect(agentTabIdsIn("ws-b")).toEqual(["agent-1"]);
   });
 
   it("keeps a history-opened archived agent tab open", () => {
