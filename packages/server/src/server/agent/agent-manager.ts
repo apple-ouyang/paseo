@@ -1,6 +1,7 @@
 import { projectTimelineRows } from "./timeline-projection.js";
 import {
   appendMessagePreview,
+  buildMessagePreview,
   isMessageTimelineItem,
   type AgentMessagePreview,
 } from "./message-preview.js";
@@ -4056,10 +4057,9 @@ export class AgentManager {
   ): Promise<void> {
     // Hidden while the provider history is read: the timeline is about to be
     // replaced, and a search during that async read must not find a turn a rewind
-    // just deleted. A failed read leaves the timeline untouched, so the preview
-    // goes back; a successful one is refilled by the replay through
-    // `recordTimeline`.
-    const previousPreview = agent.previewMessages;
+    // just deleted. A successful read is refilled by the replay through
+    // `recordTimeline`; a failed one is rebuilt from whatever timeline is in place
+    // by then, because an overlapping replacement may have swapped it meanwhile.
     const hiddenPreview: AgentMessagePreview[] = [];
     agent.previewMessages = hiddenPreview;
     const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
@@ -4079,12 +4079,9 @@ export class AgentManager {
         }
       }
     } catch (error) {
-      // Another replacement may have refilled the preview while this read ran —
-      // overlapping rewinds are the case. Only restore the snapshot this call
-      // took, and only while it is still the one in place.
-      if (agent.previewMessages === hiddenPreview) {
-        agent.previewMessages = previousPreview;
-      }
+      agent.previewMessages = this.timelineStore.has(agent.id)
+        ? buildMessagePreview(this.timelineStore.getItems(agent.id))
+        : [];
       throw error;
     }
 

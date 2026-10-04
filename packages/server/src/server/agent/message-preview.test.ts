@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 import {
   appendMessagePreview,
+  buildMessagePreview,
   capMessagePreviewText,
   MESSAGE_PREVIEW_LIMIT,
   MESSAGE_PREVIEW_TEXT_LIMIT,
@@ -102,6 +103,28 @@ describe("appendMessagePreview", () => {
     );
     expect(joined[0]?.text).toHaveLength(MESSAGE_PREVIEW_TEXT_LIMIT);
     expect(joined[0]?.text).not.toContain("…tail");
+  });
+});
+
+describe("buildMessagePreview", () => {
+  it("folds a whole timeline, merging streamed chunks and ignoring the rest", () => {
+    const reasoningItem: AgentTimelineItem = { type: "reasoning", text: "thinking" };
+    expect(
+      buildMessagePreview([
+        userPrompt,
+        reasoningItem,
+        assistantChunk,
+        { type: "assistant_message", text: "answer" },
+        { type: "todo", items: [] },
+      ]),
+    ).toEqual([
+      { role: "user", text: "explain the importer" },
+      { role: "assistant", text: "the answer" },
+    ]);
+  });
+
+  it("returns nothing for a timeline without messages", () => {
+    expect(buildMessagePreview([{ type: "reasoning", text: "thinking" }])).toEqual([]);
   });
 });
 

@@ -82,6 +82,23 @@ export function appendMessagePreview(
 }
 
 /**
+ * Fold a whole timeline into a preview. Only for the paths that replace the
+ * timeline or recover from a failed read: it walks every item, where the append
+ * path reads just the one item it is recording.
+ */
+export function buildMessagePreview(items: readonly AgentTimelineItem[]): AgentMessagePreview[] {
+  let preview: AgentMessagePreview[] = [];
+  let previousItem: AgentTimelineItem | undefined;
+  for (const item of items) {
+    if (isMessageTimelineItem(item)) {
+      preview = appendMessagePreview(preview, item, previousItem);
+    }
+    previousItem = item;
+  }
+  return preview;
+}
+
+/**
  * The excerpt a History row shows, newest message first, anchored on the tokens
  * that only a message matched. Returns null when no message carries one.
  */
