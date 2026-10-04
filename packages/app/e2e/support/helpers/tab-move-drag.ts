@@ -101,11 +101,9 @@ export async function beginTabMoveDrag(page: Page, chip: Locator): Promise<TabMo
 }
 
 /** Press and hold the first visible tab chip, whatever kind it is. */
-export async function beginFirstTabMoveDrag(page: Page): Promise<TabMoveDrag> {
-  const chip = page
+export function firstTabChip(page: Page): Locator {
+  return page
     .locator(`[data-testid^="${TAB_CHIP_PREFIX}"]:not([data-testid^="${TAB_CHIP_PREFIX}context-"])`)
     .filter({ visible: true })
     .first();
-  await expect(chip).toBeVisible({ timeout: 30_000 });
-  return beginTabMoveDrag(page, chip);
 }

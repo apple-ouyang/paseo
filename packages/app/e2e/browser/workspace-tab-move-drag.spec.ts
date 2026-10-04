@@ -3,10 +3,10 @@ import { gotoWorkspace, pressNewTabShortcut } from "../support/helpers/launcher"
 import { getServerId } from "../support/helpers/server-id";
 import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
 import {
-  beginFirstTabMoveDrag,
   beginTabMoveDrag,
   expectNoTabMoveAffordances,
   expectTabMoveAffordances,
+  firstTabChip,
   tabChip,
 } from "../support/helpers/tab-move-drag";
 
@@ -68,9 +68,15 @@ test("a non-agent tab never offers a workspace move", async ({ page, withWorkspa
   await plain.navigateTo();
   await pressNewTabShortcut(page);
 
-  const drag = await beginFirstTabMoveDrag(page);
-  await drag.ontoWorkspaceRow(`${getServerId()}:${plain.workspaceId}`);
+  const chip = firstTabChip(page);
+  await expect(chip).toBeVisible({ timeout: 30_000 });
+  const chipTestId = await chip.getAttribute("data-testid");
+  const drag = await beginTabMoveDrag(page, chip);
+
+  // A different workspace, so a broken non-agent guard would actually move it.
+  await drag.ontoWorkspaceRow(`${getServerId()}:${target.workspaceId}`);
   await expectNoTabMoveAffordances(page);
 
   await drag.drop();
+  await expect(page.getByTestId(chipTestId!)).toHaveCount(1);
 });
