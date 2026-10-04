@@ -16,6 +16,7 @@ import {
   planTabOrderEnforcement,
   planTabWorkspaceEnforcement,
   resolveSidebarDropWorkspaceKey,
+  workspaceKeyServerId,
   resolveWorkspaceTabMoveRowLabel,
   resolveWorkspaceTabMoveSource,
   resolveWorkspaceTabMoveStrings,
@@ -440,6 +441,20 @@ describe("resolveSidebarDropWorkspaceKey", () => {
     expect(resolveSidebarDropWorkspaceKey("workspace-tab-abc")).toBeNull();
     expect(resolveSidebarDropWorkspaceKey(null)).toBeNull();
     expect(resolveSidebarDropWorkspaceKey("sidebar-workspace-row-")).toBeNull();
+  });
+});
+
+describe("workspaceKeyServerId", () => {
+  it("returns the host half of a layout key", () => {
+    expect(workspaceKeyServerId("srv_e2e_worker_0:wks_123")).toBe("srv_e2e_worker_0");
+  });
+
+  it("returns null for keys without a host separator", () => {
+    expect(workspaceKeyServerId("wks_123")).toBeNull();
+    expect(workspaceKeyServerId(":wks_123")).toBeNull();
+    expect(workspaceKeyServerId("")).toBeNull();
+    expect(workspaceKeyServerId(null)).toBeNull();
+    expect(workspaceKeyServerId(undefined)).toBeNull();
   });
 });
 

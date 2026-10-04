@@ -234,6 +234,18 @@ export function resolveSidebarDropWorkspaceKey(testId: string | null | undefined
   return workspaceKey || null;
 }
 
+/**
+ * Host half of a `serverId:workspaceId` layout key. Returns null for a key with
+ * no separator, so a malformed test id can never look like a same-host drop.
+ */
+export function workspaceKeyServerId(workspaceKey: string | null | undefined): string | null {
+  if (typeof workspaceKey !== "string") {
+    return null;
+  }
+  const separator = workspaceKey.indexOf(":");
+  return separator > 0 ? workspaceKey.slice(0, separator) : null;
+}
+
 export type WorkspaceTabMoveTitleSource = "title" | "branch";
 
 export interface WorkspaceTabMoveStrings {

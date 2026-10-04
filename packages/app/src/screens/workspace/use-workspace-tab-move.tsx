@@ -15,6 +15,7 @@ import {
   listWorkspaceTabMoveTargets,
   resolveSidebarDropWorkspaceKey,
   SIDEBAR_WORKSPACE_ROW_TESTID_PREFIX,
+  workspaceKeyServerId,
   type WorkspaceTabMoveWorkspace,
 } from "@/screens/workspace/workspace-tab-move";
 import {
@@ -199,6 +200,11 @@ export function WorkspaceTabMoveSheet({
  * it there. The app sidebar lives outside the tab strip's dnd-kit context, so
  * this listens at the document level and only takes over after the pointer
  * has traveled — the built-in tab reorder keeps the first few pixels.
+ *
+ * The gesture stays silent until the pointer is actually over a workspace row
+ * the tab can move to: for the first stretch the user is only reordering tabs,
+ * so no drop label or highlight should appear. Native drag gestures draw nothing
+ * into React's tree; both affordances are fixed overlays appended to `<body>`.
  * Web/desktop only; never installs on native.
  */
 export function useWorkspaceTabMoveDnd(workspaceKey?: string | null): void {
@@ -212,39 +218,123 @@ export function useWorkspaceTabMoveDnd(workspaceKey?: string | null): void {
     if (!isWeb || typeof document === "undefined") {
       return;
     }
-    // Imperative read: the drag ghost/outline are raw DOM mutations, so theme
+    // Imperative read: the drag ghost/highlight are raw DOM mutations, so theme
     // colors are fetched at drag time instead of through a subscription.
     const themeColors = () =>
       (UnistylesRuntime.themeName ? REGISTERED_THEMES[UnistylesRuntime.themeName] : darkTheme)
         .colors;
     let pending: { x: number; y: number; suffix: string } | null = null;
+    /** Resolved once per gesture; a non-agent tab has nothing to move. */
+    let source: { workspaceKey: string; agentId: string; tabId: string } | null = null;
+    let dragging = false;
     let ghost: HTMLDivElement | null = null;
-    let hoverRow: HTMLElement | null = null;
-    let hoverOutline = "";
+    let highlight: HTMLDivElement | null = null;
 
+    const sidebarRows = (): HTMLElement[] =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          `[data-testid^="${SIDEBAR_WORKSPACE_ROW_TESTID_PREFIX}"]`,
+        ),
+      );
+
+    // Rect hit-testing instead of `elementFromPoint`: during a tab drag the
+    // dnd-kit DragOverlay and our own ghost sit under the cursor, so point
+    // hit-testing reports the overlay and the row underneath is never found.
     const rowAt = (x: number, y: number): HTMLElement | null => {
-      let el: Element | null = null;
-      try {
-        el = document.elementFromPoint(x, y);
-      } catch {
+      for (const row of sidebarRows()) {
+        const rect = row.getBoundingClientRect();
+        if (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          x >= rect.left &&
+          x <= rect.right &&
+          y >= rect.top &&
+          y <= rect.bottom
+        ) {
+          return row;
+        }
+      }
+      return null;
+    };
+
+    /**
+     * Workspace key a drop would target: the row's key when it names another
+     * workspace on the same host as the dragged tab, otherwise null.
+     */
+    const dropTargetKey = (row: HTMLElement | null): string | null => {
+      if (!row || !source) {
         return null;
       }
-      return el?.closest?.(`[data-testid^="${SIDEBAR_WORKSPACE_ROW_TESTID_PREFIX}"]`) ?? null;
-    };
-    const clearHover = () => {
-      if (hoverRow) {
-        hoverRow.style.outline = hoverOutline;
+      const targetKey = resolveSidebarDropWorkspaceKey(row.getAttribute("data-testid"));
+      if (!targetKey || targetKey === source.workspaceKey) {
+        return null;
       }
-      hoverRow = null;
+      // A tab stays on the host that owns the agent — dropping onto another
+      // server's workspace row would park a foreign agent's tab there.
+      return workspaceKeyServerId(targetKey) === workspaceKeyServerId(source.workspaceKey)
+        ? targetKey
+        : null;
+    };
+
+    const clearHighlight = () => {
+      if (highlight?.parentNode) {
+        highlight.parentNode.removeChild(highlight);
+      }
+      highlight = null;
     };
     const clearGhost = () => {
-      ghost?.parentNode?.removeChild(ghost);
+      if (ghost?.parentNode) {
+        ghost.parentNode.removeChild(ghost);
+      }
       ghost = null;
     };
     const reset = () => {
-      clearHover();
+      clearHighlight();
       clearGhost();
       pending = null;
+      source = null;
+      dragging = false;
+    };
+
+    /**
+     * Paint the target row as our own overlay. Mutating the row's inline
+     * `outline` is not durable: the sidebar re-renders during a drag and React
+     * drops styles it does not own, so the frame would flash and vanish.
+     */
+    const showHighlight = (row: HTMLElement) => {
+      const rect = row.getBoundingClientRect();
+      if (!highlight) {
+        highlight = document.createElement("div");
+        highlight.setAttribute("data-testid", "workspace-tab-move-highlight");
+        highlight.style.cssText =
+          "position:fixed;z-index:2147483000;pointer-events:none;box-sizing:border-box;";
+        document.body.appendChild(highlight);
+      }
+      const colors = themeColors();
+      highlight.style.left = `${rect.left}px`;
+      highlight.style.top = `${rect.top}px`;
+      highlight.style.width = `${rect.width}px`;
+      highlight.style.height = `${rect.height}px`;
+      highlight.style.border = `2px solid ${colors.accent}`;
+      highlight.style.borderRadius = getComputedStyle(row).borderRadius || "8px";
+    };
+
+    const showGhost = (x: number, y: number) => {
+      if (!ghost) {
+        const colors = themeColors();
+        ghost = document.createElement("div");
+        ghost.setAttribute("data-testid", "workspace-tab-move-ghost");
+        ghost.style.cssText =
+          "position:fixed;z-index:2147483001;pointer-events:none;padding:4px 10px;" +
+          "border-radius:8px;font-size:12px;box-shadow:0 6px 20px rgba(0,0,0,0.35);" +
+          `background:${colors.surface1};color:${colors.foreground};` +
+          `border:1px solid ${colors.border};` +
+          "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;";
+        ghost.textContent = tRef.current("workspace.tabs.menu.moveToWorkspace");
+        document.body.appendChild(ghost);
+      }
+      ghost.style.left = `${x + 12}px`;
+      ghost.style.top = `${y + 12}px`;
     };
 
     const onMouseDown = (event: MouseEvent) => {
@@ -262,68 +352,62 @@ export function useWorkspaceTabMoveDnd(workspaceKey?: string | null): void {
       if (!pending) {
         return;
       }
-      const dist = Math.abs(event.clientX - pending.x) + Math.abs(event.clientY - pending.y);
-      if (!ghost) {
+      if (!dragging) {
+        const dist = Math.abs(event.clientX - pending.x) + Math.abs(event.clientY - pending.y);
         if (dist < 8) {
           return;
         }
-        const colors = themeColors();
-        ghost = document.createElement("div");
-        ghost.style.cssText =
-          "position:fixed;z-index:2147483001;pointer-events:none;padding:4px 10px;" +
-          "border-radius:8px;font-size:12px;box-shadow:0 6px 20px rgba(0,0,0,0.35);" +
-          `background:${colors.surface1};color:${colors.foreground};` +
-          `border:1px solid ${colors.border};` +
-          "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;";
-        ghost.textContent = tRef.current("workspace.tabs.menu.moveToWorkspace");
-        document.body.appendChild(ghost);
-      }
-      ghost.style.left = `${event.clientX + 12}px`;
-      ghost.style.top = `${event.clientY + 12}px`;
-      const row = rowAt(event.clientX, event.clientY);
-      if (row !== hoverRow) {
-        clearHover();
-        if (row) {
-          hoverRow = row;
-          hoverOutline = row.style.outline;
-          row.style.outline = `2px solid ${themeColors().accent}`;
+        const resolved = findAgentTabByTestIdentity(pending.suffix, workspaceKeyRef.current);
+        if (!resolved) {
+          // Terminal / new-tab / launcher chips stay on the built-in reorder.
+          reset();
+          return;
         }
+        source = resolved;
+        dragging = true;
+      }
+      const row = rowAt(event.clientX, event.clientY);
+      if (!dropTargetKey(row)) {
+        clearGhost();
+        clearHighlight();
+        return;
+      }
+      showGhost(event.clientX, event.clientY);
+      if (row) {
+        showHighlight(row);
       }
     };
     const onMouseUp = (event: MouseEvent) => {
       if (!pending) {
         return;
       }
-      const suffix = pending.suffix;
-      const row = ghost ? rowAt(event.clientX, event.clientY) : null;
+      const wasDragging = dragging;
+      const releasedSource = source;
+      const row = wasDragging ? rowAt(event.clientX, event.clientY) : null;
       reset();
-      const targetWorkspaceKey = resolveSidebarDropWorkspaceKey(row?.getAttribute("data-testid"));
-      if (!targetWorkspaceKey) {
+      if (!wasDragging || !row || !releasedSource) {
         return;
       }
-      const source = findAgentTabByTestIdentity(suffix, workspaceKeyRef.current);
-      if (!source || source.workspaceKey === targetWorkspaceKey) {
-        return;
-      }
-      const separator = targetWorkspaceKey.indexOf(":");
-      const sourceSeparator = source.workspaceKey.indexOf(":");
-      if (separator <= 0 || sourceSeparator <= 0) {
-        return;
-      }
-      // A tab stays on the host that owns the agent — dropping onto another
-      // server's workspace row would park a foreign agent's tab there.
+      const targetWorkspaceKey = resolveSidebarDropWorkspaceKey(row.getAttribute("data-testid"));
+      const serverId = workspaceKeyServerId(releasedSource.workspaceKey);
       if (
-        targetWorkspaceKey.slice(0, separator) !== source.workspaceKey.slice(0, sourceSeparator)
+        !targetWorkspaceKey ||
+        !serverId ||
+        serverId !== workspaceKeyServerId(targetWorkspaceKey)
       ) {
         return;
       }
+      const separator = targetWorkspaceKey.indexOf(":");
+      if (separator <= 0) {
+        return;
+      }
       moveAgentTabToWorkspace({
-        serverId: targetWorkspaceKey.slice(0, separator),
-        sourceWorkspaceKey: source.workspaceKey,
+        serverId,
+        sourceWorkspaceKey: releasedSource.workspaceKey,
         targetWorkspaceKey,
         targetWorkspaceId: targetWorkspaceKey.slice(separator + 1),
-        agentId: source.agentId,
-        tabId: source.tabId,
+        agentId: releasedSource.agentId,
+        tabId: releasedSource.tabId,
       });
     };
 
