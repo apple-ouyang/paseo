@@ -237,19 +237,62 @@ export function useWorkspaceTabMoveDnd(workspaceKey?: string | null): void {
         ),
       );
 
+    /**
+     * The part of the row that is actually visible. The sidebar list clips its
+     * rows, so a row scrolled half out of the list still has a full bounding
+     * box; without intersecting the clipping ancestors a drop near the edge
+     * would target a workspace the user cannot see.
+     */
+    const visibleRect = (
+      row: HTMLElement,
+    ): { top: number; bottom: number; left: number; right: number } | null => {
+      const rect = row.getBoundingClientRect();
+      let top = rect.top;
+      let bottom = rect.bottom;
+      let left = rect.left;
+      let right = rect.right;
+      for (let node = row.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        const clipsX = style.overflowX !== "visible";
+        const clipsY = style.overflowY !== "visible";
+        if (!clipsX && !clipsY) {
+          continue;
+        }
+        const clip = node.getBoundingClientRect();
+        if (clipsX) {
+          left = Math.max(left, clip.left);
+          right = Math.min(right, clip.right);
+        }
+        if (clipsY) {
+          top = Math.max(top, clip.top);
+          bottom = Math.min(bottom, clip.bottom);
+        }
+        if (right <= left || bottom <= top) {
+          return null;
+        }
+      }
+      return { top, bottom, left, right };
+    };
+
     // Rect hit-testing instead of `elementFromPoint`: during a tab drag the
     // dnd-kit DragOverlay and our own ghost sit under the cursor, so point
     // hit-testing reports the overlay and the row underneath is never found.
     const rowAt = (x: number, y: number): HTMLElement | null => {
       for (const row of sidebarRows()) {
         const rect = row.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0 || x < rect.left || x > rect.right) {
+          continue;
+        }
+        if (y < rect.top || y > rect.bottom) {
+          continue;
+        }
+        const visible = visibleRect(row);
         if (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          x >= rect.left &&
-          x <= rect.right &&
-          y >= rect.top &&
-          y <= rect.bottom
+          visible &&
+          x >= visible.left &&
+          x <= visible.right &&
+          y >= visible.top &&
+          y <= visible.bottom
         ) {
           return row;
         }
@@ -382,18 +425,26 @@ export function useWorkspaceTabMoveDnd(workspaceKey?: string | null): void {
         return;
       }
       const wasDragging = dragging;
-      const releasedSource = source;
+      const releasedSuffix = pending.suffix;
       const row = wasDragging ? rowAt(event.clientX, event.clientY) : null;
       reset();
-      if (!wasDragging || !row || !releasedSource) {
+      if (!wasDragging || !row) {
         return;
       }
       const targetWorkspaceKey = resolveSidebarDropWorkspaceKey(row.getAttribute("data-testid"));
-      const serverId = workspaceKeyServerId(releasedSource.workspaceKey);
+      if (!targetWorkspaceKey) {
+        return;
+      }
+      // Resolve the source again at release instead of trusting the drag-start
+      // copy: a close or move that landed mid-drag leaves the cached tab stale,
+      // and completing the move would reopen a tab the user just closed.
+      const releasedSource = findAgentTabByTestIdentity(releasedSuffix, workspaceKeyRef.current);
+      const serverId = workspaceKeyServerId(releasedSource?.workspaceKey);
       if (
-        !targetWorkspaceKey ||
+        !releasedSource ||
         !serverId ||
-        serverId !== workspaceKeyServerId(targetWorkspaceKey)
+        serverId !== workspaceKeyServerId(targetWorkspaceKey) ||
+        releasedSource.workspaceKey === targetWorkspaceKey
       ) {
         return;
       }
