@@ -584,6 +584,7 @@ function createSessionForWorkspaceTests(
   const agentManager = asAgentManager({
     subscribe: () => () => {},
     listAgents: () => [],
+    listMessagePreviews: () => new Map(),
     listProviderSubagentActivity: () => [],
     getAgent: () => null,
     archiveAgent: async () => ({ archivedAt: new Date().toISOString() }),
@@ -3139,6 +3140,68 @@ test("fetch_agent_history_request matches stored messages and explains the row",
   const nameResponse = filterByType(emitted, "fetch_agent_history_response")[0];
   expect(nameResponse.payload.entries.map((entry) => entry.agent.id)).toEqual(["in-conversation"]);
   expect(nameResponse.payload.entries[0].searchSnippet).toBeUndefined();
+});
+
+test("fetch_agent_history_request reads a live message preview before its record write", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const historyCwd = path.resolve("/tmp/history-live-preview");
+  const project = createPersistedProjectRecord({
+    projectId: "proj-live-preview",
+    rootPath: historyCwd,
+    kind: "non_git",
+    displayName: "live-preview",
+    createdAt: "2026-03-01T12:00:00.000Z",
+    updatedAt: "2026-03-01T12:00:00.000Z",
+  });
+  const workspace = createPersistedWorkspaceRecord({
+    workspaceId: "ws-live-preview",
+    projectId: project.projectId,
+    cwd: historyCwd,
+    kind: "directory",
+    displayName: "live-preview",
+    createdAt: "2026-03-01T12:00:00.000Z",
+    updatedAt: "2026-03-01T12:00:00.000Z",
+  });
+  const session = createSessionForWorkspaceTests({
+    // The stored copy has nothing yet: the record write is still queued.
+    agentStorage: { list: async () => [{ id: "just-said", previewMessages: undefined }] },
+    agentManager: {
+      listMessagePreviews: () =>
+        new Map([["just-said", [{ role: "user", text: "compare the kumquat numbers" }]]]),
+    },
+  });
+
+  session.emit = (message) => {
+    if (isSessionOutboundMessage(message)) emitted.push(message);
+  };
+  session.projectRegistry.get = async () => project;
+  session.workspaceRegistry.list = async () => [workspace];
+  session.workspaceRegistry.get = async () => workspace;
+  session.listAgentPayloads = async () => [
+    {
+      ...makeAgent({
+        id: "just-said",
+        cwd: historyCwd,
+        workspaceId: "ws-live-preview",
+        status: "idle",
+        updatedAt: "2026-03-02T12:00:00.000Z",
+      }),
+      title: "Quarterly review",
+    },
+  ];
+
+  await session.handleMessage({
+    type: "fetch_agent_history_request",
+    requestId: "req-live-preview",
+    search: "kumquat",
+  });
+
+  const response = filterByType(emitted, "fetch_agent_history_response")[0];
+  expect(response.payload.entries.map((entry) => entry.agent.id)).toEqual(["just-said"]);
+  expect(response.payload.entries[0].searchSnippet).toEqual({
+    role: "user",
+    text: "compare the kumquat numbers",
+  });
 });
 
 test("fetch_agent_history_request rejects a malformed search cursor", async () => {

@@ -5364,6 +5364,11 @@ export class Session {
         previewMessagesById.set(record.id, record.previewMessages);
       }
     }
+    // The live copy wins: a message recorded a moment ago is here before its
+    // queued record write reaches the storage cache.
+    for (const [agentId, preview] of this.agentManager.listMessagePreviews()) {
+      previewMessagesById.set(agentId, preview);
+    }
     return previewMessagesById;
   }
 

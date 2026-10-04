@@ -1,3 +1,4 @@
+import type { AgentMessagePreview } from "@getpaseo/protocol/messages";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 
 /**
@@ -8,18 +9,19 @@ import type { AgentTimelineItem } from "./agent-sdk-types.js";
 export const MESSAGE_PREVIEW_LIMIT = 5;
 export const MESSAGE_PREVIEW_TEXT_LIMIT = 500;
 
-/**
- * A long timeline with a burst of tool calls could sit between messages. The
- * walk stops there rather than scanning the whole history on every append.
- */
-export const MESSAGE_PREVIEW_SCAN_LIMIT = 200;
+export type { AgentMessagePreview };
 
-export interface AgentMessagePreview {
-  role: "user" | "assistant";
-  text: string;
+type MessageTimelineItem = Extract<
+  AgentTimelineItem,
+  { type: "user_message" } | { type: "assistant_message" }
+>;
+
+export function isMessageTimelineItem(item: AgentTimelineItem): item is MessageTimelineItem {
+  return item.type === "user_message" || item.type === "assistant_message";
 }
 
 /** Collapse whitespace and cut on a character budget, marking the cut. */
+/** Collapse whitespace runs and cut on a character budget, marking the cut. */
 export function capMessagePreviewText(text: string): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (collapsed.length <= MESSAGE_PREVIEW_TEXT_LIMIT) {
@@ -29,62 +31,65 @@ export function capMessagePreviewText(text: string): string {
 }
 
 /**
- * The newest logical messages, oldest first. Providers stream assistant text as
- * a run of contiguous `assistant_message` items (Claude chunks a reply), so a
- * run merges into one message with no separator, matching how the daemon joins
- * the last reply elsewhere.
+ * The same bound, without trimming the end: a streamed reply is joined chunk by
+ * chunk, and trimming each chunk would fuse "the " with whatever follows. The
+ * stored copy is trimmed when it is projected.
  */
-export function buildMessagePreview(items: readonly AgentTimelineItem[]): AgentMessagePreview[] {
-  const newestFirst: AgentMessagePreview[] = [];
-  let previousWasAssistant = false;
-  let scanned = 0;
-
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (scanned >= MESSAGE_PREVIEW_SCAN_LIMIT) {
-      break;
-    }
-    scanned += 1;
-
-    const item = items[index];
-    if (item.type === "assistant_message") {
-      const previous = newestFirst[newestFirst.length - 1];
-      if (previousWasAssistant && previous?.role === "assistant") {
-        previous.text = capMessagePreviewText(`${item.text}${previous.text}`);
-      } else {
-        newestFirst.push({ role: "assistant", text: capMessagePreviewText(item.text) });
-      }
-      previousWasAssistant = true;
-    } else if (item.type === "user_message") {
-      newestFirst.push({ role: "user", text: capMessagePreviewText(item.text) });
-      previousWasAssistant = false;
-    } else {
-      // A reasoning step or tool call ends the current reply's chunk run.
-      previousWasAssistant = false;
-      continue;
-    }
-
-    if (newestFirst.length >= MESSAGE_PREVIEW_LIMIT) {
-      break;
-    }
+function capStreamingPreviewText(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ");
+  if (collapsed.length <= MESSAGE_PREVIEW_TEXT_LIMIT) {
+    return collapsed;
   }
+  return `${collapsed.slice(0, MESSAGE_PREVIEW_TEXT_LIMIT - 1)}…`;
+}
 
-  return newestFirst.toReversed();
+/** Providers stream a reply in chunks; drop the previous ellipsis before joining. */
+function joinPreviewText(previousText: string, chunkText: string): string {
+  const trimmed = previousText.endsWith("…") ? previousText.slice(0, -1) : previousText;
+  return `${trimmed}${chunkText}`;
 }
 
 /**
- * The excerpt a History row shows when the query only matched a message, newest
- * message first. Returns null when no message carries a token.
+ * Fold one recorded message into the preview, oldest first.
+ *
+ * This is deliberately incremental: providers can emit hundreds of tool or
+ * reasoning items between two messages, so rebuilding from a bounded slice of
+ * the timeline would drop the question that is still the newest thing asked.
+ * `previousItem` is the timeline item recorded just before this one, which is
+ * what decides whether an assistant item continues the same reply.
+ */
+export function appendMessagePreview(
+  preview: readonly AgentMessagePreview[],
+  item: MessageTimelineItem,
+  previousItem: AgentTimelineItem | undefined,
+): AgentMessagePreview[] {
+  const role = item.type === "user_message" ? "user" : "assistant";
+  const last = preview.at(-1);
+  const continuesReply =
+    role === "assistant" &&
+    previousItem?.type === "assistant_message" &&
+    last?.role === "assistant";
+  const next: AgentMessagePreview =
+    role === "assistant"
+      ? {
+          role,
+          text: capStreamingPreviewText(
+            continuesReply ? joinPreviewText(last.text, item.text) : item.text,
+          ),
+        }
+      : { role, text: capMessagePreviewText(item.text) };
+  return [...(continuesReply ? preview.slice(0, -1) : preview), next].slice(-MESSAGE_PREVIEW_LIMIT);
+}
+
+/**
+ * The excerpt a History row shows, newest message first, anchored on the tokens
+ * that only a message matched. Returns null when no message carries one.
  */
 export function messagePreviewSnippet(
-  query: string,
+  tokens: readonly string[],
   preview: readonly AgentMessagePreview[],
   limit = 160,
 ): AgentMessagePreview | null {
-  const tokens = query
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((token) => token.length > 0);
   if (tokens.length === 0) {
     return null;
   }

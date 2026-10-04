@@ -29,6 +29,28 @@ function readStoredAgent(paseoHomeRoot: string, agentId: string): Record<string,
   throw new Error(`stored agent ${agentId} not found under ${agentsDir}`);
 }
 
+/**
+ * The record is rewritten from queued snapshot flushes, so a just-finished turn
+ * can land a moment after it reports done.
+ */
+async function waitForStoredPreview(
+  paseoHomeRoot: string,
+  agentId: string,
+  settled: (messages: StoredPreviewMessage[]) => boolean,
+  timeoutMs = 5000,
+): Promise<StoredPreviewMessage[]> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const preview =
+      (readStoredAgent(paseoHomeRoot, agentId) as { previewMessages?: StoredPreviewMessage[] })
+        .previewMessages ?? [];
+    if (settled(preview) || Date.now() >= deadline) {
+      return preview;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 function writeStoredAgent(
   agentsDir: string,
   agentId: string,
@@ -82,17 +104,9 @@ test("a finished turn stores the newest messages for history search", async () =
 
     // The record is rewritten from queued snapshot flushes, so the reply lands a
     // moment after the turn finishes.
-    const deadline = Date.now() + 5000;
-    let preview: StoredPreviewMessage[] = [];
-    while (Date.now() < deadline) {
-      preview =
-        (readStoredAgent(paseoHomeRoot, agent.id) as { previewMessages?: StoredPreviewMessage[] })
-          .previewMessages ?? [];
-      if (preview.some((message) => message.role === "assistant")) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    const preview = await waitForStoredPreview(paseoHomeRoot, agent.id, (messages) =>
+      messages.some((message) => message.role === "assistant"),
+    );
     expect(preview[1]).toEqual({
       role: "assistant",
       text: "THE_REPLY_MARKER",

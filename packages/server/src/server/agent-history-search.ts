@@ -58,6 +58,10 @@ export function matchAgentHistoryQuery(
     : "";
 
   let matchedInMessages = false;
+  // Only the words a message had to carry pick the snippet: a word the title
+  // already explains would otherwise choose a row that then hides the word
+  // which actually made the message necessary.
+  const messageTokens: string[] = [];
   for (const token of tokens) {
     if (scoreTextFields(token, names, { typoTolerant: true }) !== null) {
       continue;
@@ -66,6 +70,7 @@ export function matchAgentHistoryQuery(
       return NO_MATCH;
     }
     matchedInMessages = true;
+    messageTokens.push(token);
   }
 
   if (!matchedInMessages) {
@@ -73,6 +78,6 @@ export function matchAgentHistoryQuery(
   }
   return {
     matched: true,
-    messageSnippet: messagePreviewSnippet(query, previewMessages ?? []),
+    messageSnippet: messagePreviewSnippet(messageTokens, previewMessages ?? []),
   };
 }

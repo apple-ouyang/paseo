@@ -160,4 +160,19 @@ describe("matchAgentHistoryQuery snippet", () => {
       text: "I renamed it and updated its callers",
     });
   });
+
+  it("picks the message with the word the names could not explain", () => {
+    const entry = candidate({
+      title: "Fix the terminal",
+      previewMessages: [
+        { role: "user", text: "the admin panel is slow" },
+        { role: "assistant", text: "I fixed the terminal redraw" },
+      ],
+    });
+    // "fix" is already explained by the title and also appears in the reply;
+    // only "admin" makes the message necessary, so that message is the snippet.
+    const result = matchAgentHistoryQuery("fix admin", entry);
+    expect(result.matched).toBe(true);
+    expect(result.messageSnippet).toEqual({ role: "user", text: "the admin panel is slow" });
+  });
 });

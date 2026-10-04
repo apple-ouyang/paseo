@@ -1,22 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 import {
-  buildMessagePreview,
+  appendMessagePreview,
   capMessagePreviewText,
   MESSAGE_PREVIEW_LIMIT,
   MESSAGE_PREVIEW_TEXT_LIMIT,
   messagePreviewSnippet,
+  type AgentMessagePreview,
 } from "./message-preview.js";
 
-function user(text: string): AgentTimelineItem {
-  return { type: "user_message", text };
-}
-
-function assistant(text: string): AgentTimelineItem {
-  return { type: "assistant_message", text };
-}
-
+const userPrompt: AgentTimelineItem = { type: "user_message", text: "explain the importer" };
+const assistantChunk: AgentTimelineItem = { type: "assistant_message", text: "the " };
 const reasoning: AgentTimelineItem = { type: "reasoning", text: "thinking about it" };
+
+function append(
+  preview: readonly AgentMessagePreview[],
+  item: AgentTimelineItem,
+  previousItem?: AgentTimelineItem,
+): AgentMessagePreview[] {
+  if (item.type !== "user_message" && item.type !== "assistant_message") {
+    throw new Error("test helper only appends messages");
+  }
+  return appendMessagePreview(preview, item, previousItem);
+}
 
 describe("capMessagePreviewText", () => {
   it("collapses whitespace and trims", () => {
@@ -35,77 +41,67 @@ describe("capMessagePreviewText", () => {
   });
 });
 
-describe("buildMessagePreview", () => {
-  it("returns nothing for a timeline without messages", () => {
-    expect(buildMessagePreview([reasoning])).toEqual([]);
-  });
-
-  it("keeps the newest messages, oldest first", () => {
-    const preview = buildMessagePreview([user("one"), assistant("two"), user("three")]);
-    expect(preview).toEqual([
-      { role: "user", text: "one" },
-      { role: "assistant", text: "two" },
-      { role: "user", text: "three" },
-    ]);
-  });
-
-  it("keeps only the newest messages", () => {
-    const items: AgentTimelineItem[] = [];
-    for (let index = 0; index < MESSAGE_PREVIEW_LIMIT + 3; index += 1) {
-      items.push(user(`question ${index}`), assistant(`answer ${index}`));
-    }
-    const preview = buildMessagePreview(items);
-    expect(preview).toHaveLength(MESSAGE_PREVIEW_LIMIT);
-    expect(preview.at(-1)).toEqual({ role: "assistant", text: "answer 7" });
-    expect(preview.at(0)).toEqual({ role: "assistant", text: "answer 5" });
-    expect(preview.some((message) => message.text === "question 4")).toBe(false);
-    expect(preview.some((message) => message.text === "question 5")).toBe(false);
-  });
-
-  it("joins contiguous assistant chunks into one reply", () => {
-    const preview = buildMessagePreview([user("explain"), assistant("the "), assistant("answer")]);
-    expect(preview).toEqual([
-      { role: "user", text: "explain" },
-      { role: "assistant", text: "the answer" },
-    ]);
-  });
-
-  it("treats a reasoning step between replies as a message boundary", () => {
-    const preview = buildMessagePreview([
-      assistant("first reply"),
-      reasoning,
-      assistant("second reply"),
-    ]);
-    expect(preview).toEqual([
-      { role: "assistant", text: "first reply" },
-      { role: "assistant", text: "second reply" },
-    ]);
-  });
-
-  it("ignores non-message items between messages", () => {
-    const preview = buildMessagePreview([
-      user("hi"),
-      reasoning,
-      { type: "todo", items: [] },
-      assistant("done"),
-    ]);
-    expect(preview).toEqual([
-      { role: "user", text: "hi" },
+describe("appendMessagePreview", () => {
+  it("appends a question and then the reply", () => {
+    const withPrompt = append([], userPrompt);
+    expect(withPrompt).toEqual([{ role: "user", text: "explain the importer" }]);
+    expect(append(withPrompt, { type: "assistant_message", text: "done" }, userPrompt)).toEqual([
+      { role: "user", text: "explain the importer" },
       { role: "assistant", text: "done" },
     ]);
   });
 
-  it("caps each message", () => {
-    const preview = buildMessagePreview([user("z".repeat(MESSAGE_PREVIEW_TEXT_LIMIT + 10))]);
-    expect(preview[0]?.text).toHaveLength(MESSAGE_PREVIEW_TEXT_LIMIT);
+  it("joins contiguous assistant chunks into one reply", () => {
+    const preview = append([], assistantChunk, reasoning);
+    const joined = append(preview, { type: "assistant_message", text: "answer" }, assistantChunk);
+    expect(joined).toEqual([{ role: "assistant", text: "the answer" }]);
   });
 
-  it("stops walking a long tail of non-message items", () => {
-    const items: AgentTimelineItem[] = [
-      user("ancient question"),
-      ...Array.from({ length: 400 }, () => reasoning),
-    ];
-    expect(buildMessagePreview(items)).toEqual([]);
+  it("starts a new reply when a reasoning step came between chunks", () => {
+    const preview = append([], assistantChunk, reasoning);
+    const separated = append(
+      preview,
+      { type: "assistant_message", text: "second reply" },
+      reasoning,
+    );
+    expect(separated).toEqual([
+      { role: "assistant", text: "the " },
+      { role: "assistant", text: "second reply" },
+    ]);
+  });
+
+  it("drops the oldest message once the window is full", () => {
+    let preview: AgentMessagePreview[] = [];
+    for (let index = 0; index < MESSAGE_PREVIEW_LIMIT + 2; index += 1) {
+      preview = append(preview, { type: "user_message", text: `question ${index}` });
+    }
+    expect(preview).toHaveLength(MESSAGE_PREVIEW_LIMIT);
+    expect(preview.at(0)).toEqual({ role: "user", text: "question 2" });
+    expect(preview.at(-1)).toEqual({ role: "user", text: "question 6" });
+  });
+
+  it("keeps a question that arrived long before the reply", () => {
+    const preview = append([], userPrompt);
+    // Hundreds of reasoning or tool items can sit between the question and the
+    // reply. They never reach the preview, and the reply must not push the
+    // question out — rebuilding from a bounded timeline slice would.
+    const reply = append(preview, { type: "assistant_message", text: "done" }, reasoning);
+    expect(reply).toEqual([
+      { role: "user", text: "explain the importer" },
+      { role: "assistant", text: "done" },
+    ]);
+  });
+
+  it("caps a joined reply and does not keep the previous ellipsis", () => {
+    const long = capMessagePreviewText("a".repeat(MESSAGE_PREVIEW_TEXT_LIMIT + 20));
+    expect(long.endsWith("…")).toBe(true);
+    const joined = append(
+      [{ role: "assistant", text: long }],
+      { type: "assistant_message", text: "tail" },
+      assistantChunk,
+    );
+    expect(joined[0]?.text).toHaveLength(MESSAGE_PREVIEW_TEXT_LIMIT);
+    expect(joined[0]?.text).not.toContain("…tail");
   });
 });
 
@@ -116,11 +112,15 @@ describe("messagePreviewSnippet", () => {
   ];
 
   it("returns null when no message carries a token", () => {
-    expect(messagePreviewSnippet("kubernetes", preview)).toBeNull();
+    expect(messagePreviewSnippet(["kubernetes"], preview)).toBeNull();
   });
 
-  it("matches the newest message first and is case insensitive", () => {
-    expect(messagePreviewSnippet("IMPORTER", preview)).toEqual({
+  it("returns null without tokens", () => {
+    expect(messagePreviewSnippet([], preview)).toBeNull();
+  });
+
+  it("matches the newest message first", () => {
+    expect(messagePreviewSnippet(["importer"], preview)).toEqual({
       role: "assistant",
       text: "I renamed the importer and updated its callers",
     });
@@ -128,14 +128,10 @@ describe("messagePreviewSnippet", () => {
 
   it("keeps the match inside the window and marks both cuts", () => {
     const long = `${"a".repeat(200)} needle ${"b".repeat(200)}`;
-    const snippet = messagePreviewSnippet("needle", [{ role: "user", text: long }], 100);
+    const snippet = messagePreviewSnippet(["needle"], [{ role: "user", text: long }], 100);
     expect(snippet?.text).toContain("needle");
     expect(snippet?.text.length).toBeLessThanOrEqual(102);
     expect(snippet?.text.startsWith("…")).toBe(true);
     expect(snippet?.text.endsWith("…")).toBe(true);
-  });
-
-  it("returns null for an empty query", () => {
-    expect(messagePreviewSnippet("   ", preview)).toBeNull();
   });
 });

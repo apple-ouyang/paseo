@@ -544,4 +544,11 @@ describe("stored message preview", () => {
   it("omits the field when there is nothing to search", () => {
     expect(toStoredAgentRecord(createManagedAgent()).previewMessages).toBeUndefined();
   });
+
+  it("trims a streamed reply when it is stored", () => {
+    const record = toStoredAgentRecord(
+      createManagedAgent({ previewMessages: [{ role: "assistant", text: "still typing " }] }),
+    );
+    expect(record.previewMessages).toEqual([{ role: "assistant", text: "still typing" }]);
+  });
 });

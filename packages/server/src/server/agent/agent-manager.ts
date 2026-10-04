@@ -1,7 +1,7 @@
 import { projectTimelineRows } from "./timeline-projection.js";
 import {
-  buildMessagePreview,
-  MESSAGE_PREVIEW_SCAN_LIMIT,
+  appendMessagePreview,
+  isMessageTimelineItem,
   type AgentMessagePreview,
 } from "./message-preview.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
@@ -1185,6 +1185,20 @@ export class AgentManager {
   getTimeline(id: string): AgentTimelineItem[] {
     this.requireAgent(id);
     return this.timelineStore.getItems(id);
+  }
+
+  /**
+   * The live message previews. A recorded message lands here before its queued
+   * record write, so a search during that gap still finds what was just said.
+   */
+  listMessagePreviews(): Map<string, AgentMessagePreview[]> {
+    const byId = new Map<string, AgentMessagePreview[]>();
+    for (const [id, agent] of this.agents) {
+      if (agent.previewMessages.length > 0) {
+        byId.set(id, agent.previewMessages);
+      }
+    }
+    return byId;
   }
 
   async getTimelineRows(id: string): Promise<AgentTimelineRow[]> {
@@ -4849,17 +4863,21 @@ export class AgentManager {
     },
   ): AgentTimelineRow {
     item = limitAgentTimelineItemContent(item);
+    const agent = this.agents.get(agentId);
+    const isMessage = isMessageTimelineItem(item);
+    // Read the item above this one before appending: it decides whether an
+    // assistant item continues the reply already in the preview.
+    const previousItem =
+      isMessage && agent && this.timelineStore.has(agentId)
+        ? this.timelineStore.getRecentItems(agentId, 1)[0]
+        : undefined;
     const row = this.timelineStore.append(agentId, item, options);
     this.enqueueDurableTimelineAppend(agentId, row);
-    if (item.type === "user_message" || item.type === "assistant_message") {
-      // Refreshed on append rather than at persist time: reads only the recent
-      // tail, and only for the two item types that can change the preview.
-      const agent = this.agents.get(agentId);
-      if (agent) {
-        agent.previewMessages = buildMessagePreview(
-          this.timelineStore.getRecentItems(agentId, MESSAGE_PREVIEW_SCAN_LIMIT),
-        );
-      }
+    if (agent && isMessageTimelineItem(item)) {
+      // Folded in, not rebuilt: providers can emit hundreds of tool or reasoning
+      // items between two messages, so a bounded rebuild would drop the question
+      // that is still the newest thing asked.
+      agent.previewMessages = appendMessagePreview(agent.previewMessages, item, previousItem);
     }
     return row;
   }

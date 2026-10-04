@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Logger } from "pino";
 
 import { writeJsonFileAtomic } from "../atomic-file.js";
-import { AgentFeatureSchema, AgentStatusSchema } from "../messages.js";
+import { AgentFeatureSchema, AgentMessagePreviewSchema, AgentStatusSchema } from "../messages.js";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import type { ManagedAgent } from "./agent-manager.js";
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
@@ -57,9 +57,7 @@ const STORED_AGENT_SCHEMA = z.object({
    * this so a phrase remembered from the conversation still finds the session.
    * Records written before this field existed simply have none.
    */
-  previewMessages: z
-    .array(z.object({ role: z.enum(["user", "assistant"]), text: z.string() }))
-    .optional(),
+  previewMessages: z.array(AgentMessagePreviewSchema).optional(),
   labels: z.record(z.string(), z.string()).default({}),
   lastStatus: AgentStatusSchema.default("closed"),
   lastModeId: z.string().nullable().optional(),
