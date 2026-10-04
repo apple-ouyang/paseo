@@ -41,6 +41,7 @@ describe("resolveSessionsEmptyText", () => {
         isSearching: true,
         isAllHosts: true,
         archivedFilter: "archived",
+        hasMore: true,
       }),
     ).toBe("sessions.noMatches");
   });
@@ -52,6 +53,7 @@ describe("resolveSessionsEmptyText", () => {
         isSearching: false,
         isAllHosts: true,
         archivedFilter: "archived",
+        hasMore: false,
       }),
     ).toBe("sessions.archivedFilter.emptyArchived");
     expect(
@@ -60,8 +62,30 @@ describe("resolveSessionsEmptyText", () => {
         isSearching: false,
         isAllHosts: true,
         archivedFilter: "active",
+        hasMore: false,
       }),
     ).toBe("sessions.archivedFilter.emptyActive");
+  });
+
+  it("does not claim a filter is empty while later pages are unfetched", () => {
+    expect(
+      resolveSessionsEmptyText({
+        t,
+        isSearching: false,
+        isAllHosts: true,
+        archivedFilter: "archived",
+        hasMore: true,
+      }),
+    ).toBe("sessions.noMatches");
+    expect(
+      resolveSessionsEmptyText({
+        t,
+        isSearching: false,
+        isAllHosts: true,
+        archivedFilter: "active",
+        hasMore: true,
+      }),
+    ).toBe("sessions.noMatches");
   });
 
   it("falls back to the plain empty text without a query or a filter", () => {
@@ -71,6 +95,7 @@ describe("resolveSessionsEmptyText", () => {
         isSearching: false,
         isAllHosts: true,
         archivedFilter: "all",
+        hasMore: false,
       }),
     ).toBe("sessions.empty");
     expect(
@@ -79,6 +104,7 @@ describe("resolveSessionsEmptyText", () => {
         isSearching: false,
         isAllHosts: false,
         archivedFilter: "all",
+        hasMore: false,
       }),
     ).toBe("No sessions for this host");
   });

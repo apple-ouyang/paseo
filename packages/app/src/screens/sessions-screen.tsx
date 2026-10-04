@@ -140,6 +140,7 @@ function SessionsScreenContent() {
     isSearching,
     isAllHosts: selectedHost === ALL_HOSTS_OPTION_ID,
     archivedFilter,
+    hasMore,
   });
   const showHostFilter = hosts.length > 1;
   const showLoadError = isError && agents.length === 0;
@@ -179,14 +180,16 @@ function SessionsScreenContent() {
           useful even where history search is not supported. */}
       <View style={styles.filterContainer}>
         {isSearchSupported ? (
-          <SearchField
-            value={searchInput}
-            onChangeText={setSearchInput}
-            placeholder={t("sessions.searchPlaceholder")}
-            clearAccessibilityLabel={t("sessions.actions.clearSearch")}
-            testID="sessions-search-input"
-            clearTestID="sessions-search-clear"
-          />
+          <View style={styles.filterSearchSlot}>
+            <SearchField
+              value={searchInput}
+              onChangeText={setSearchInput}
+              placeholder={t("sessions.searchPlaceholder")}
+              clearAccessibilityLabel={t("sessions.actions.clearSearch")}
+              testID="sessions-search-input"
+              clearTestID="sessions-search-clear"
+            />
+          </View>
         ) : null}
         {showHostFilter ? (
           <HostFilter
@@ -234,6 +237,18 @@ function SessionsScreenContent() {
           <Button variant="ghost" leftIcon={Import} onPress={importSession.open}>
             {t("importSession.title")}
           </Button>
+          {/* The filter can hide a whole loaded page, so the list's own footer
+              is not on screen; keep the next page reachable from here. */}
+          {hasMore ? (
+            <Button
+              variant="ghost"
+              onPress={loadMore}
+              disabled={isLoadingMore}
+              testID="sessions-empty-load-more"
+            >
+              {isLoadingMore ? "Loading..." : t("sessions.actions.loadMore")}
+            </Button>
+          ) : null}
         </View>
       ) : null}
       {!isInitialLoad && !showLoadError && visibleAgents.length > 0 ? (
@@ -261,12 +276,22 @@ const styles = StyleSheet.create((theme) => ({
   filterContainer: {
     flexDirection: "row",
     alignItems: "center",
+    // Narrow screens wrap the segmented filter onto its own line instead of
+    // squeezing the search field to nothing (same rail as the Schedules screen).
+    flexWrap: "wrap",
     gap: theme.spacing[2],
     paddingHorizontal: {
       xs: theme.spacing[3],
       md: theme.spacing[6],
     },
     paddingTop: theme.spacing[4],
+  },
+  filterSearchSlot: {
+    flexDirection: "row",
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 180,
+    minWidth: 180,
   },
   emptyContainer: {
     flex: 1,

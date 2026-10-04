@@ -27,15 +27,24 @@ export function resolveSessionsEmptyText(input: {
   isSearching: boolean;
   isAllHosts: boolean;
   archivedFilter: SessionsArchivedFilter;
+  /**
+   * Later pages exist. A filter-specific message claims that kind is empty,
+   * which the loaded page cannot support while more rows are still unfetched.
+   */
+  hasMore: boolean;
 }): string {
   if (input.isSearching) {
     return input.t("sessions.noMatches");
   }
   if (input.archivedFilter === "archived") {
-    return input.t("sessions.archivedFilter.emptyArchived");
+    return input.hasMore
+      ? input.t("sessions.noMatches")
+      : input.t("sessions.archivedFilter.emptyArchived");
   }
   if (input.archivedFilter === "active") {
-    return input.t("sessions.archivedFilter.emptyActive");
+    return input.hasMore
+      ? input.t("sessions.noMatches")
+      : input.t("sessions.archivedFilter.emptyActive");
   }
   if (input.isAllHosts) {
     return input.t("sessions.empty");
