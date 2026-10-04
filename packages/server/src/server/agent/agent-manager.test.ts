@@ -816,6 +816,62 @@ test("replacing the timeline drops messages that are no longer in it", async () 
   }
 });
 
+test("a failed history read keeps the preview the surviving timeline explains", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-preview-read-fail-"));
+  let failAfterFirstMessage = false;
+  class HistorySession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "user_message", text: "keep the kumquat plan" },
+      };
+      if (failAfterFirstMessage) {
+        throw new Error("provider history read failed");
+      }
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "noted" },
+      };
+    }
+  }
+  class HistoryClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new HistorySession(config);
+    }
+
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return new HistorySession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  }
+  const manager = new AgentManager({ clients: { codex: new HistoryClient() }, logger });
+  let agentId: string | null = null;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true, broadcast: true });
+    const before = manager.listMessagePreviews().get(agent.id) ?? [];
+    expect(before.map((message) => message.text)).toEqual(["keep the kumquat plan", "noted"]);
+
+    // A rewind whose history read fails must not leave the surviving turns
+    // unsearchable: the timeline is still the old one.
+    failAfterFirstMessage = true;
+    await expect(
+      manager.hydrateTimelineFromProvider(agent.id, { force: true, broadcast: true }),
+    ).rejects.toThrow("provider history read failed");
+    expect(manager.listMessagePreviews().get(agent.id) ?? []).toEqual(before);
+  } finally {
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("a live agent with nothing to preview still reports an empty preview", async () => {
   // The history search merges these over the stored records, so an emptied
   // preview has to be present to mask the copy a rewind has not overwritten yet.

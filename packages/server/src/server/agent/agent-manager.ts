@@ -83,7 +83,7 @@ import {
   type PendingForegroundRun,
 } from "./agent-run-state.js";
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
-import { projectAgentMessage } from "./agent-messages/index.js";
+import { isSystemInjectedEnvelope, projectAgentMessage } from "./agent-messages/index.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { stripInternalPaseoMcpServer, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
@@ -4054,21 +4054,32 @@ export class AgentManager {
     broadcast: boolean,
     broadcastTimeline: boolean,
   ): Promise<void> {
-    // Cleared before the provider history is collected, not after: the timeline is
-    // about to be replaced, and a search during the (async) read must not find a
-    // turn a rewind just deleted. The replay refills it through `recordTimeline`.
+    // Hidden while the provider history is read: the timeline is about to be
+    // replaced, and a search during that async read must not find a turn a rewind
+    // just deleted. A failed read leaves the timeline untouched, so the preview
+    // goes back; a successful one is refilled by the replay through
+    // `recordTimeline`.
+    const previousPreview = agent.previewMessages;
     agent.previewMessages = [];
     const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
     const providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
-    for await (const rawEvent of agent.session.streamHistory()) {
-      const event = limitAgentStreamEventContent(rawEvent);
-      if (event.type === "timeline") {
-        const item = projectAgentMessage(event.item);
-        if (!item) continue;
-        historyEvents.push({ ...event, item });
-      } else if (event.type === "provider_subagent") {
-        providerSubagentEvents.push(event);
+    try {
+      for await (const rawEvent of agent.session.streamHistory()) {
+        const event = limitAgentStreamEventContent(rawEvent);
+        if (event.type === "timeline") {
+          if (event.item.type === "user_message" && isSystemInjectedEnvelope(event.item.text)) {
+            continue;
+          }
+          const item = projectAgentMessage(event.item);
+          if (!item) continue;
+          historyEvents.push({ ...event, item });
+        } else if (event.type === "provider_subagent") {
+          providerSubagentEvents.push(event);
+        }
       }
+    } catch (error) {
+      agent.previewMessages = previousPreview;
+      throw error;
     }
 
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
