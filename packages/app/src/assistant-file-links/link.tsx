@@ -102,7 +102,9 @@ export function AssistantMarkdownLink({
 
   return (
     <FileLinkHoverTooltip filePath={tooltipPath}>
-      <LinkContextMenu source={source}>{anchor}</LinkContextMenu>
+      <LinkContextMenu source={source} resolvedTarget={target}>
+        {anchor}
+      </LinkContextMenu>
     </FileLinkHoverTooltip>
   );
 }
