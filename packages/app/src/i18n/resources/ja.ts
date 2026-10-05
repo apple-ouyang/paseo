@@ -230,6 +230,14 @@ export const ja: TranslationResources = {
     },
   },
   agentStream: {
+    linkMenu: {
+      openInPaseo: "Paseo で開く",
+      openInBrowser: "デフォルトのブラウザで開く",
+      copyFilePath: "ファイルパスをコピー",
+      openWithDefaultApp: "既定のアプリで開く",
+      revealIn: "{{target}} で表示",
+      fileManagerFallback: "ファイルマネージャー",
+    },
     empty: "このエージェントとチャットを始めましょう...",
     scrollToBottom: "下にスクロール",
     historyLoadFailed: "エージェントの履歴を読み込めませんでした",

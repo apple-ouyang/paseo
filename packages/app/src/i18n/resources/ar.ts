@@ -228,6 +228,14 @@ export const ar: TranslationResources = {
     },
   },
   agentStream: {
+    linkMenu: {
+      openInPaseo: "الفتح في Paseo",
+      openInBrowser: "الفتح في المتصفح الافتراضي",
+      copyFilePath: "نسخ مسار الملف",
+      openWithDefaultApp: "الفتح بالتطبيق الافتراضي",
+      revealIn: "الإظهار في {{target}}",
+      fileManagerFallback: "مدير الملفات",
+    },
     empty: "ابدأ الدردشة مع هذا الوكيل...",
     scrollToBottom: "قم بالتمرير إلى الأسفل",
     historyLoadFailed: "تعذر تحميل سجل الوكيل",

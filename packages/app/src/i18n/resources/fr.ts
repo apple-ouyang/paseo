@@ -231,6 +231,14 @@ export const fr: TranslationResources = {
     },
   },
   agentStream: {
+    linkMenu: {
+      openInPaseo: "Ouvrir dans Paseo",
+      openInBrowser: "Ouvrir dans le navigateur par défaut",
+      copyFilePath: "Copier le chemin du fichier",
+      openWithDefaultApp: "Ouvrir avec l'application par défaut",
+      revealIn: "Afficher dans {{target}}",
+      fileManagerFallback: "gestionnaire de fichiers",
+    },
     empty: "Commencez à discuter avec cet agent…",
     scrollToBottom: "Faire défiler vers le bas",
     historyLoadFailed: "Impossible de charger l’historique de l’agent",

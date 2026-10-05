@@ -229,6 +229,14 @@ export const ptBR: TranslationResources = {
     },
   },
   agentStream: {
+    linkMenu: {
+      openInPaseo: "Abrir no Paseo",
+      openInBrowser: "Abrir no navegador padrão",
+      copyFilePath: "Copiar caminho do arquivo",
+      openWithDefaultApp: "Abrir com o aplicativo padrão",
+      revealIn: "Mostrar em {{target}}",
+      fileManagerFallback: "gerenciador de arquivos",
+    },
     empty: "Comece a conversar com este agente...",
     scrollToBottom: "Rolar para o fim",
     historyLoadFailed: "Não foi possível carregar o histórico do agente",

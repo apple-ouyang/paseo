@@ -224,6 +224,14 @@ export const en = {
     },
   },
   agentStream: {
+    linkMenu: {
+      openInPaseo: "Open in Paseo",
+      openInBrowser: "Open in default browser",
+      copyFilePath: "Copy file path",
+      openWithDefaultApp: "Open with default app",
+      revealIn: "Reveal in {{target}}",
+      fileManagerFallback: "file manager",
+    },
     empty: "Start chatting with this agent...",
     scrollToBottom: "Scroll to bottom",
     historyLoadFailed: "Couldn't load agent history",
