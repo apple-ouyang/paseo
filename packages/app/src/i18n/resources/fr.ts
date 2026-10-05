@@ -639,6 +639,7 @@ export const fr: TranslationResources = {
         copyAgentId: "Copier l’ID de l’agent",
         copyTerminalId: "Copier l’ID du terminal",
         copyFilePath: "Copier le chemin du fichier",
+        openWithDefaultApp: "Ouvrir avec l'application par défaut",
         rename: "Renommer",
         closeAbove: "Fermer les onglets au-dessus",
         closeBelow: "Fermer les onglets en dessous",

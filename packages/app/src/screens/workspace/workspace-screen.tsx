@@ -134,6 +134,7 @@ import {
   buildWorkspaceTabMenuEntries,
   type WorkspaceTabMenuLabels,
 } from "@/screens/workspace/workspace-tab-menu";
+import { useWorkspaceTabFileActions } from "@/workspace/open-in-file-manager/tab-file-actions";
 import { useDesktopBrowserNewTabRequests } from "@/desktop/browser/new-tab-requests";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
 import {
@@ -567,6 +568,10 @@ function MobileWorkspaceTabOption({
     [t],
   );
   const menuTestIDBase = `workspace-tab-menu-${tab.tabId}`;
+  const fileActions = useWorkspaceTabFileActions({
+    serverId: normalizedServerId,
+    workspaceId: normalizedWorkspaceId,
+  });
   const menuEntries = buildWorkspaceTabMenuEntries({
     surface: "mobile",
     tab,
@@ -583,6 +588,7 @@ function MobileWorkspaceTabOption({
     onCloseTabsBefore: onCloseTabsAbove,
     onCloseTabsAfter: onCloseTabsBelow,
     onCloseOtherTabs,
+    fileActions: fileActions ?? undefined,
     labels: tabMenuLabels,
   });
 

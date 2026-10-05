@@ -631,6 +631,7 @@ export const en = {
         copyAgentId: "Copy agent id",
         copyTerminalId: "Copy terminal id",
         copyFilePath: "Copy file path",
+        openWithDefaultApp: "Open with default app",
         rename: "Rename",
         closeAbove: "Close tabs above",
         closeBelow: "Close tabs below",
