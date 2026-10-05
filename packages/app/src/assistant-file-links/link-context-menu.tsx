@@ -2,6 +2,8 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import type { ViewStyle } from "react-native";
 import { useTranslation } from "react-i18next";
 import * as Clipboard from "expo-clipboard";
+import { AppWindow, Copy, ExternalLink, FolderOpen, Globe } from "lucide-react-native";
+import { withUnistyles } from "react-native-unistyles";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -12,6 +14,7 @@ import { useToast } from "@/contexts/toast-context";
 import { useIsLocalDaemon } from "@/hooks/use-is-local-daemon";
 import { createWorkspaceBrowser } from "@/desktop/browser/store";
 import { usePaneContext } from "@/panels/pane-context";
+import type { Theme } from "@/styles/theme";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { openDesktopTarget, useDesktopOpenTargets } from "@/workspace/desktop-open-targets";
 import { resolveWorkspaceFilePaths } from "@/workspace/file-open";
@@ -19,6 +22,15 @@ import { useAssistantFileLinkResolverContext } from "./provider";
 import { classifyForResolution } from "./resolver";
 import type { AssistantFileLinkSource } from "./resolver";
 import { resolveLinkMenuTarget } from "./link-menu-target";
+
+const ThemedAppWindow = withUnistyles(AppWindow);
+const ThemedGlobe = withUnistyles(Globe);
+const ThemedCopy = withUnistyles(Copy);
+const ThemedExternalLink = withUnistyles(ExternalLink);
+const ThemedFolderOpen = withUnistyles(FolderOpen);
+const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+
+const LEADING_SIZE = 15;
 
 export function LinkContextMenu({
   source,
@@ -38,6 +50,17 @@ export function LinkContextMenu({
     [source, workspaceRoot],
   );
   const target = useMemo(() => resolveLinkMenuTarget(resolution), [resolution]);
+  // Precomputed so the menu items pass elements, not inline JSX props.
+  const leading = useMemo(
+    () => ({
+      paseo: <ThemedAppWindow size={LEADING_SIZE} uniProps={mutedColorMapping} />,
+      browser: <ThemedGlobe size={LEADING_SIZE} uniProps={mutedColorMapping} />,
+      copy: <ThemedCopy size={LEADING_SIZE} uniProps={mutedColorMapping} />,
+      defaultApp: <ThemedExternalLink size={LEADING_SIZE} uniProps={mutedColorMapping} />,
+      reveal: <ThemedFolderOpen size={LEADING_SIZE} uniProps={mutedColorMapping} />,
+    }),
+    [],
+  );
   const isLocalExecution = useIsLocalDaemon(serverId);
   const { targets } = useDesktopOpenTargets({ isLocalExecution });
   const fileManagerTarget = useMemo(
@@ -112,20 +135,33 @@ export function LinkContextMenu({
       <ContextMenuContent align="start" width={240}>
         {target.kind === "external" ? (
           <>
-            <ContextMenuItem testID="link-menu-open-in-paseo" onSelect={openInPaseo}>
+            <ContextMenuItem
+              testID="link-menu-open-in-paseo"
+              leading={leading.paseo}
+              onSelect={openInPaseo}
+            >
               {t("agentStream.linkMenu.openInPaseo")}
             </ContextMenuItem>
-            <ContextMenuItem testID="link-menu-open-in-browser" onSelect={openInBrowser}>
+            <ContextMenuItem
+              testID="link-menu-open-in-browser"
+              leading={leading.browser}
+              onSelect={openInBrowser}
+            >
               {t("agentStream.linkMenu.openInBrowser")}
             </ContextMenuItem>
           </>
         ) : (
           <>
-            <ContextMenuItem testID="link-menu-copy-path" onSelect={copyFilePath}>
+            <ContextMenuItem
+              testID="link-menu-copy-path"
+              leading={leading.copy}
+              onSelect={copyFilePath}
+            >
               {t("agentStream.linkMenu.copyFilePath")}
             </ContextMenuItem>
             <ContextMenuItem
               testID="link-menu-open-with-default-app"
+              leading={leading.defaultApp}
               disabled={!fileManagerTarget}
               onSelect={openWithDefaultApp}
             >
@@ -133,6 +169,7 @@ export function LinkContextMenu({
             </ContextMenuItem>
             <ContextMenuItem
               testID="link-menu-reveal-in-file-manager"
+              leading={leading.reveal}
               disabled={!fileManagerTarget}
               onSelect={revealInFileManager}
             >
