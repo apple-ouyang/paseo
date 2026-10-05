@@ -51,6 +51,9 @@ export function useWorkspaceTabFileActions(
         ? resolveWorkspaceFilePaths({ path: filePath, workspaceRoot: workspaceDirectory })
         : null;
       if (!resolved) {
+        // A missing workspace directory (or a home-relative path) leaves nothing
+        // to hand to the OS; say so instead of failing silently.
+        toast.error(t("workspace.fileExplorer.errors.revealFailed"));
         return;
       }
       void action(resolved.absolutePath).catch((cause: unknown) => {

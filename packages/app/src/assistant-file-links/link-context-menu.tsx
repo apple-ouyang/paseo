@@ -11,16 +11,20 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useToast } from "@/contexts/toast-context";
+import { getIsElectron } from "@/constants/platform";
 import { useIsLocalDaemon } from "@/hooks/use-is-local-daemon";
 import { createWorkspaceBrowser } from "@/desktop/browser/store";
 import { usePaneContext } from "@/panels/pane-context";
 import type { Theme } from "@/styles/theme";
+import { isAbsolutePath } from "@/utils/path";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { openDesktopTarget, useDesktopOpenTargets } from "@/workspace/desktop-open-targets";
 import { resolveWorkspaceFilePaths } from "@/workspace/file-open";
+import { parentDirectory } from "@/workspace/open-in-file-manager/tab-file-actions";
 import { useAssistantFileLinkResolverContext } from "./provider";
 import { classifyForResolution } from "./resolver";
 import type { AssistantFileLinkSource } from "./resolver";
+import type { InlinePathTarget } from "./parse";
 import { resolveLinkMenuTarget } from "./link-menu-target";
 
 const ThemedAppWindow = withUnistyles(AppWindow);
@@ -34,14 +38,18 @@ const LEADING_SIZE = 15;
 
 export function LinkContextMenu({
   source,
+  resolvedTarget,
   children,
 }: {
   source: AssistantFileLinkSource;
+  /** The target the click path resolved (null while a daemon lookup is pending). */
+  resolvedTarget: InlinePathTarget | null;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
   const pane = usePaneContext();
+  const isElectron = getIsElectron();
   const { configRef } = useAssistantFileLinkResolverContext();
   const workspaceRoot = configRef.current.workspaceRoot ?? "";
   const serverId = configRef.current.serverId ?? "";
@@ -49,7 +57,10 @@ export function LinkContextMenu({
     () => classifyForResolution(source, { workspaceRoot }),
     [source, workspaceRoot],
   );
-  const target = useMemo(() => resolveLinkMenuTarget(resolution), [resolution]);
+  const target = useMemo(
+    () => resolveLinkMenuTarget(resolution, resolvedTarget),
+    [resolution, resolvedTarget],
+  );
   // Precomputed so the menu items pass elements, not inline JSX props.
   const leading = useMemo(
     () => ({
@@ -71,19 +82,21 @@ export function LinkContextMenu({
     if (target?.kind !== "file") {
       return null;
     }
-    if (!workspaceRoot) {
-      return target.path;
+    // `~/...` has no workspace-relative form; only hand the OS something absolute.
+    const resolved = workspaceRoot
+      ? resolveWorkspaceFilePaths({ path: target.path, workspaceRoot })
+      : null;
+    if (resolved) {
+      return resolved.absolutePath;
     }
-    return (
-      resolveWorkspaceFilePaths({ path: target.path, workspaceRoot })?.absolutePath ?? target.path
-    );
+    return isAbsolutePath(target.path) ? target.path : null;
   }, [target, workspaceRoot]);
 
   const openInPaseo = useCallback(() => {
-    if (target?.kind !== "external") return;
+    if (target?.kind !== "external" || !isElectron) return;
     const { browserId } = createWorkspaceBrowser({ initialUrl: target.url });
     pane.openTab({ kind: "browser", browserId });
-  }, [pane, target]);
+  }, [isElectron, pane, target]);
 
   const openInBrowser = useCallback(() => {
     if (target?.kind !== "external") return;
@@ -99,7 +112,10 @@ export function LinkContextMenu({
 
   const runFileAction = useCallback(
     (action: (fileManagerId: string, path: string) => Promise<void>) => {
-      if (!fileManagerTarget || !absolutePath) return;
+      if (!fileManagerTarget || !absolutePath) {
+        toast.error(t("workspace.fileExplorer.errors.revealFailed"));
+        return;
+      }
       void action(fileManagerTarget.id, absolutePath).catch((cause: unknown) => {
         toast.error(
           cause instanceof Error ? cause.message : t("workspace.fileExplorer.errors.revealFailed"),
@@ -117,7 +133,7 @@ export function LinkContextMenu({
     runFileAction((editorId, path) =>
       openDesktopTarget({
         editorId,
-        workspacePath: path.slice(0, path.lastIndexOf("/")) || "/",
+        workspacePath: parentDirectory(path),
         filePath: path,
       }),
     );
@@ -135,13 +151,15 @@ export function LinkContextMenu({
       <ContextMenuContent align="start" width={240}>
         {target.kind === "external" ? (
           <>
-            <ContextMenuItem
-              testID="link-menu-open-in-paseo"
-              leading={leading.paseo}
-              onSelect={openInPaseo}
-            >
-              {t("agentStream.linkMenu.openInPaseo")}
-            </ContextMenuItem>
+            {isElectron ? (
+              <ContextMenuItem
+                testID="link-menu-open-in-paseo"
+                leading={leading.paseo}
+                onSelect={openInPaseo}
+              >
+                {t("agentStream.linkMenu.openInPaseo")}
+              </ContextMenuItem>
+            ) : null}
             <ContextMenuItem
               testID="link-menu-open-in-browser"
               leading={leading.browser}
@@ -155,6 +173,7 @@ export function LinkContextMenu({
             <ContextMenuItem
               testID="link-menu-copy-path"
               leading={leading.copy}
+              disabled={!absolutePath}
               onSelect={copyFilePath}
             >
               {t("agentStream.linkMenu.copyFilePath")}
@@ -162,7 +181,7 @@ export function LinkContextMenu({
             <ContextMenuItem
               testID="link-menu-open-with-default-app"
               leading={leading.defaultApp}
-              disabled={!fileManagerTarget}
+              disabled={!fileManagerTarget || !absolutePath}
               onSelect={openWithDefaultApp}
             >
               {t("agentStream.linkMenu.openWithDefaultApp")}
@@ -170,7 +189,7 @@ export function LinkContextMenu({
             <ContextMenuItem
               testID="link-menu-reveal-in-file-manager"
               leading={leading.reveal}
-              disabled={!fileManagerTarget}
+              disabled={!fileManagerTarget || !absolutePath}
               onSelect={revealInFileManager}
             >
               {t("agentStream.linkMenu.revealIn", {
