@@ -65,6 +65,8 @@ export type WorkspaceTabMenuEntry =
         | "arrow-right-to-line"
         | "copy-x"
         | "pencil"
+        | "external-link"
+        | "folder-open"
         | "x";
       hint?: string;
       tooltip?: string;
@@ -266,6 +268,7 @@ export function buildWorkspaceTabMenuEntries(
         kind: "item",
         key: "open-with-default-app",
         label: fileActions.openWithDefaultApp.label,
+        icon: "external-link",
         testID: `${menuTestIDBase}-open-with-default-app`,
         onSelect: () => {
           fileActions.openWithDefaultApp.onSelect(filePath);
@@ -275,6 +278,7 @@ export function buildWorkspaceTabMenuEntries(
         kind: "item",
         key: "reveal-in-file-manager",
         label: fileActions.revealInFileManager.label,
+        icon: "folder-open",
         testID: `${menuTestIDBase}-reveal-in-file-manager`,
         onSelect: () => {
           fileActions.revealInFileManager.onSelect(filePath);
