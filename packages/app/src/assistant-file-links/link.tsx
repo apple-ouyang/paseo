@@ -5,6 +5,7 @@ import { isNative, isWeb } from "@/constants/platform";
 import { MarkdownTextSpan } from "@/components/markdown-text";
 import { MarkdownLinkText } from "@/components/markdown/link-text";
 import { AssistantLinkPressProvider, type AssistantLinkPress } from "./link-press-context";
+import { LinkContextMenu } from "./link-context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CODE_SURFACE_DATASET } from "@/styles/code-surface";
 import { markdownCopyDataSet } from "@/assistant-selection-copy/markup";
@@ -99,7 +100,11 @@ export function AssistantMarkdownLink({
     </a>
   );
 
-  return <FileLinkHoverTooltip filePath={tooltipPath}>{anchor}</FileLinkHoverTooltip>;
+  return (
+    <FileLinkHoverTooltip filePath={tooltipPath}>
+      <LinkContextMenu source={source}>{anchor}</LinkContextMenu>
+    </FileLinkHoverTooltip>
+  );
 }
 
 interface AssistantMarkdownCodeLinkProps {
