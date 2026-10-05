@@ -324,7 +324,9 @@ describe("buildWorkspaceTabMenuEntries", () => {
       throw new Error("File action entries missing");
     }
     expect(openEntry.testID).toBe("workspace-tab-context-file_abc-open-with-default-app");
+    expect(openEntry.icon).toBe("external-link");
     expect(revealEntry.testID).toBe("workspace-tab-context-file_abc-reveal-in-file-manager");
+    expect(revealEntry.icon).toBe("folder-open");
     openEntry.onSelect();
     expect(onOpenWithDefaultApp).toHaveBeenCalledWith("src/report.md");
     revealEntry.onSelect();
