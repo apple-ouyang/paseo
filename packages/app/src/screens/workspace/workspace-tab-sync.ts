@@ -15,6 +15,7 @@ import {
   TAB_CLOSED_LABEL,
   TAB_ORDER_LABEL,
   TAB_WORKSPACE_LABEL,
+  withoutMoveLabel,
   type PendingTabLabels,
 } from "./workspace-tab-move";
 
@@ -120,7 +121,11 @@ function livePendingFields(
 function agentLabelsFor(serverId: string, agentId: string): Record<string, string> | null {
   const session = useSessionStore.getState().sessions[serverId];
   const agent = session?.agents?.get(agentId) ?? session?.agentDetails?.get(agentId);
-  return agent?.labels ?? null;
+  const labels = agent?.labels;
+  // Single choke point: every label write spreads this view (order drift,
+  // tombstone clear, broadcast adoption), so filter a stored ownership handoff
+  // here instead of at each call site. The move path re-adds it explicitly.
+  return labels ? withoutMoveLabel(labels) : null;
 }
 
 function effectiveLabels(serverId: string, agentId: string): Record<string, string> {

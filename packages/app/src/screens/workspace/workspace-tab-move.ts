@@ -10,7 +10,14 @@ import type { WorkspaceTab, WorkspaceTabTarget } from "@/workspace-tabs/model";
  * `pin: true` (an explicit open survives tab reconciliation) and leaves the
  * source via the same cleanup as closing a tab (`unpin` + `hide` + `close`), so
  * reconciliation does not re-open it there. The agent itself keeps running in
- * its original directory and stays under its original project in the sidebar.
+ * its original directory.
+ *
+ * Placement alone is a display hint: an agent's daemon-side `workspaceId`
+ * decides where official clients group it, and Paseo's own fork navigates by
+ * that id, so a display-only move makes a moved tab fork back into the source
+ * workspace. A real move therefore also hands ownership over through
+ * `MOVE_AGENT_WORKSPACE_LABEL`; the daemon (server_setup patch 19,
+ * `agent-workspace-move`) consumes the key and re-homes `workspaceId`.
  *
  * The picker mirrors the sidebar's project → workspace grouping
  * (`sidebar-workspaces-view-model`: `projectNameForWorkspace` and
@@ -36,6 +43,31 @@ export const MOVE_TO_WORKSPACE_MENU_KEY = "move-to-workspace";
  * the daemon echo lands, so a gesture never snaps back for one tick.
  */
 export const TAB_WORKSPACE_LABEL = "paseo.tab-workspace";
+
+/**
+ * Daemon-side ownership handoff, consumed by server_setup patch 19
+ * (`agent-workspace-move`): the daemon re-homes the agent's real `workspaceId`
+ * and never persists the key. It is sent together with `TAB_WORKSPACE_LABEL`
+ * on a real move, so the official grouping key and the display placement never
+ * diverge — otherwise a moved tab forks (and runs workspace-scoped features)
+ * in the workspace that created it. A host without the daemon patch simply
+ * stores the label and moves nothing.
+ */
+export const MOVE_AGENT_WORKSPACE_LABEL = "paseo.moveToWorkspace";
+
+/**
+ * Strip a stored ownership handoff before echoing labels back. The daemon
+ * consumes the key on a real move, and a host without the daemon patch stores
+ * it — replaying that stale value on an unrelated open/close/order write would
+ * re-home the agent, so every writer filters it out first.
+ */
+export function withoutMoveLabel(
+  labels: Readonly<Record<string, string>> | null | undefined,
+): Record<string, string> {
+  const next: Record<string, string> = { ...labels };
+  delete next[MOVE_AGENT_WORKSPACE_LABEL];
+  return next;
+}
 
 /** Zero-padded position of the agent tab inside its pane row. */
 export const TAB_ORDER_LABEL = "paseo.tab-order";
@@ -128,7 +160,7 @@ export function buildTabWorkspaceLabels(
   tabOrder?: number | null,
 ): Record<string, string> {
   return {
-    ...currentLabels,
+    ...withoutMoveLabel(currentLabels),
     [TAB_WORKSPACE_LABEL]: workspaceId.trim(),
     [TAB_CLOSED_LABEL]: "",
     ...(tabOrder == null ? {} : { [TAB_ORDER_LABEL]: formatTabOrderLabel(tabOrder) }),
@@ -139,7 +171,24 @@ export function buildTabWorkspaceLabels(
 export function buildTabClosedLabels(
   currentLabels: Readonly<Record<string, string>> | null | undefined,
 ): Record<string, string> {
-  return { ...currentLabels, [TAB_CLOSED_LABEL]: "1" };
+  return { ...withoutMoveLabel(currentLabels), [TAB_CLOSED_LABEL]: "1" };
+}
+
+/**
+ * Labels for a real move: display placement plus the ownership handoff. Only
+ * the explicit move gesture writes the handoff — opening or closing a tab must
+ * never re-home the agent.
+ */
+export function buildMovedTabLabels(
+  currentLabels: Readonly<Record<string, string>> | null | undefined,
+  workspaceId: string,
+  tabOrder?: number | null,
+): Record<string, string> {
+  const targetWorkspaceId = workspaceId.trim();
+  return {
+    ...buildTabWorkspaceLabels(currentLabels, targetWorkspaceId, tabOrder),
+    [MOVE_AGENT_WORKSPACE_LABEL]: targetWorkspaceId,
+  };
 }
 
 /**
@@ -414,7 +463,7 @@ export function moveWorkspaceTab(
   deps.store.closeTab(sourceWorkspaceKey, tabId);
   const targetWorkspaceId = input.targetWorkspaceId?.trim();
   if (deps.updateAgentLabels && targetWorkspaceId) {
-    deps.updateAgentLabels(agentId, buildTabWorkspaceLabels(input.agentLabels, targetWorkspaceId));
+    deps.updateAgentLabels(agentId, buildMovedTabLabels(input.agentLabels, targetWorkspaceId));
   }
   return true;
 }

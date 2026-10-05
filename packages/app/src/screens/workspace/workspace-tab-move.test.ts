@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { UpdateAgentRequestMessageSchema } from "@getpaseo/protocol/messages";
 import type { WorkspaceTab } from "@/workspace-tabs/model";
 import {
   buildMoveToWorkspaceMenuEntry,
+  buildMovedTabLabels,
   buildTabClosedLabels,
   buildTabWorkspaceLabels,
   formatTabOrderLabel,
@@ -18,7 +20,9 @@ import {
   resolveWorkspaceTabMoveRowLabel,
   resolveWorkspaceTabMoveSource,
   resolveWorkspaceTabMoveStrings,
+  withoutMoveLabel,
   MOVE_TO_WORKSPACE_MENU_KEY,
+  MOVE_AGENT_WORKSPACE_LABEL,
   TAB_CLOSED_LABEL,
   TAB_ORDER_LABEL,
   TAB_WORKSPACE_LABEL,
@@ -447,6 +451,43 @@ describe("moveWorkspaceTab", () => {
       existing: "1",
       [TAB_WORKSPACE_LABEL]: "ws-b",
       [TAB_CLOSED_LABEL]: "",
+      [MOVE_AGENT_WORKSPACE_LABEL]: "ws-b",
+    });
+  });
+
+  it("hands real ownership over on a move, and only on a move", () => {
+    expect(buildMovedTabLabels(null, "ws-b")).toEqual({
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_CLOSED_LABEL]: "",
+      [MOVE_AGENT_WORKSPACE_LABEL]: "ws-b",
+    });
+    // Placement/close builders stay display-only: opening or closing a tab
+    // must never re-home the agent.
+    expect(buildTabWorkspaceLabels(null, "ws-b")).not.toHaveProperty(MOVE_AGENT_WORKSPACE_LABEL);
+    expect(buildTabClosedLabels({ existing: "1" })).not.toHaveProperty(MOVE_AGENT_WORKSPACE_LABEL);
+  });
+
+  it("never echoes a stored ownership handoff back", () => {
+    const stored = { [MOVE_AGENT_WORKSPACE_LABEL]: "ws-old", existing: "1" };
+    expect(withoutMoveLabel(stored)).toEqual({ existing: "1" });
+    expect(buildTabWorkspaceLabels(stored, "ws-b")).not.toHaveProperty(MOVE_AGENT_WORKSPACE_LABEL);
+    expect(buildTabClosedLabels(stored)).not.toHaveProperty(MOVE_AGENT_WORKSPACE_LABEL);
+    // A real move still carries exactly one handoff.
+    expect(buildMovedTabLabels(stored, "ws-b")[MOVE_AGENT_WORKSPACE_LABEL]).toBe("ws-b");
+  });
+
+  it("produces a payload the real wire schema accepts", () => {
+    const parsed = UpdateAgentRequestMessageSchema.parse({
+      type: "update_agent_request",
+      agentId: "agent-1",
+      labels: buildMovedTabLabels({ existing: "1" }, "ws-b"),
+      requestId: "req-1",
+    });
+    expect(parsed.labels).toEqual({
+      existing: "1",
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_CLOSED_LABEL]: "",
+      [MOVE_AGENT_WORKSPACE_LABEL]: "ws-b",
     });
   });
 
