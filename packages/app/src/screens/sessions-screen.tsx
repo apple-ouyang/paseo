@@ -289,6 +289,9 @@ const styles = StyleSheet.create((theme) => ({
   filterSearchSlot: {
     flexDirection: "row",
     flexGrow: 1,
+    // Stop where the field stops (see SEARCH_FIELD_MAX_WIDTH): growing past it
+    // pushes the segmented filter to the far edge of a wide window.
+    maxWidth: 420,
     flexShrink: 1,
     flexBasis: 180,
     minWidth: 180,
