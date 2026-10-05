@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createCodeClipboardContent,
   createMarkdownClipboardContent,
+  stripCodeFences,
   type MarkdownClipboardEnvironment,
   type RichClipboardWriter,
   writeMarkdownToRichClipboard,
@@ -88,6 +89,30 @@ describe("createMarkdownClipboardContent", () => {
 
     expect(content.html).toContain('<a href="file:///tmp/paseo%20notes.md#L4">file</a>');
     expect(content.html).not.toMatch(/href="(?:javascript|data|vbscript):/);
+  });
+});
+
+describe("stripCodeFences", () => {
+  it("keeps the code and drops the fence and its info string", () => {
+    expect(stripCodeFences("```ts\nconst value = 1;\n```")).toBe("const value = 1;");
+  });
+
+  it("keeps the paragraphs around each block", () => {
+    expect(stripCodeFences(["Before.", "", "```sh", "ls", "```", "", "After."].join("\n"))).toBe(
+      "Before.\n\nls\n\nAfter.",
+    );
+  });
+
+  it("handles several blocks, an unterminated tail, and a longer fence", () => {
+    expect(stripCodeFences("```a\none\n```\n\n````b\ntwo\n````\n\n```\nthree")).toBe(
+      "one\n\ntwo\n\nthree",
+    );
+  });
+
+  it("leaves markdown without fences untouched", () => {
+    const markdown = "Plain text with `inline code` and a [link](https://example.com).";
+
+    expect(stripCodeFences(markdown)).toBe(markdown);
   });
 });
 

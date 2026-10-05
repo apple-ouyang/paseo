@@ -3,6 +3,7 @@ import { gfm } from "turndown-plugin-gfm";
 import {
   createCodeClipboardContent,
   createMarkdownClipboardContent,
+  stripCodeFences,
   type MarkdownClipboardContent,
 } from "@/utils/rich-clipboard";
 import {
@@ -89,7 +90,7 @@ export function createAssistantSelectionClipboardContent(
   if (!markdown) {
     return null;
   }
-  const content = createMarkdownClipboardContent(markdown);
+  const content = createMarkdownClipboardContent(stripCodeFences(markdown));
   return { ...content, html: flattenClipboardListMarkup(content.html) };
 }
 

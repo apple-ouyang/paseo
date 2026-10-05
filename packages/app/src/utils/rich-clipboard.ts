@@ -26,6 +26,24 @@ export function createMarkdownClipboardContent(markdown: string): MarkdownClipbo
   };
 }
 
+/**
+ * Remove Markdown code fences and keep what they wrap.
+ *
+ * Copying is for the content, not the syntax that renders it: a copied fenced block
+ * pasted into a shell, an editor, or another chat should arrive as the code itself.
+ * The fence info string and the delimiters go; the code does not.
+ *
+ * A fence inside a fenced block is only reached by the lazy match when a shorter
+ * fence closes it first, and `{3,}` lets an author's longer fence win over a
+ * nested run of backticks.
+ */
+export function stripCodeFences(markdown: string): string {
+  return markdown
+    .replace(/^[ \t]*(`{3,})[^\n]*\n([\s\S]*?)\n[ \t]*\1[ \t]*$/gm, "$2")
+    .replace(/^[ \t]*(`{3,})[^\n]*\n([\s\S]*?)[ \t]*$/gm, "$2")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
 export interface CodeClipboardOptions {
   language?: string | null;
   /** Wrap in `pre`/`code` so the line structure survives. */

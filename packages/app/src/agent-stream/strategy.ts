@@ -3,6 +3,7 @@ import type { ComponentType, ReactElement, ReactNode, RefObject } from "react";
 import type { StyleProp, ViewStyle } from "react-native";
 import type { StreamItem } from "@/types/stream";
 import { continuesResponse } from "./turn-membership";
+import { stripCodeFences } from "@/utils/rich-clipboard";
 import type { StreamHistoryBoundary, StreamRenderSegments } from "./model";
 import type {
   BottomAnchorLocalRequest,
@@ -195,7 +196,7 @@ export function createStreamStrategy(config: StreamStrategyConfig): StreamStrate
         }
         laterItem = currentItem;
       }
-      return messages.toReversed().join("\n\n");
+      return stripCodeFences(messages.toReversed().join("\n\n"));
     },
     isNearBottom: (input) => config.isNearBottom(input),
     getBottomOffset: (metrics) => config.getBottomOffset(metrics),

@@ -183,9 +183,7 @@ describe("assistant selection copy ranges", () => {
         "- First bullet text",
         "- Second bullet text",
         "",
-        "```ts",
         "const answer = true;",
-        "```",
       ].join("\n"),
     );
     expect(content?.html).not.toContain("<ul>");
@@ -598,13 +596,13 @@ describe("assistant selection copy inside highlighted code", () => {
     );
   });
 
-  it("retains the fence when a complete code block is selected across its boundary", () => {
+  it("strips the fence when a complete code block is selected across its boundary", () => {
     const message = mountHighlighted();
 
     const content = copyAcross(message, "const", "After the block.");
 
     expect(content?.plainText).toBe(
-      "```typescript\nconst answer = 1;\n  if (answer) {\n    doThing();\n```\n\nAfter the block.",
+      "const answer = 1;\n  if (answer) {\n    doThing();\n\nAfter the block.",
     );
   });
 });
