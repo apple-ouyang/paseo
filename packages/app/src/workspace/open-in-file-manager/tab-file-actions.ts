@@ -12,9 +12,14 @@ interface UseWorkspaceTabFileActionsInput {
   workspaceId: string;
 }
 
-function parentDirectory(absolutePath: string): string {
+export function parentDirectory(absolutePath: string): string {
   const separator = absolutePath.lastIndexOf("/");
-  return separator > 0 ? absolutePath.slice(0, separator) : "/";
+  if (separator < 0) return absolutePath;
+  if (separator === 0) return "/";
+  const parent = absolutePath.slice(0, separator);
+  // A file directly under a Windows drive root ("C:/file") has no separator
+  // before the drive letter; "C:" alone is not a directory.
+  return /^[A-Za-z]:$/.test(parent) ? `${parent}/` : parent;
 }
 
 /**
