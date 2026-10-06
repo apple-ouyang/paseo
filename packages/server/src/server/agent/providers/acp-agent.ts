@@ -7,7 +7,7 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 
 import { terminateWithTreeKill } from "../../../utils/tree-kill.js";
-import type { ProcessTerminator } from "../../../utils/tree-kill.js";
+import type { ProcessTerminator, TerminateWithTreeKillResult } from "../../../utils/tree-kill.js";
 import type {
   ReadableStream as NodeReadableStream,
   WritableStream as NodeWritableStream,
@@ -1763,6 +1763,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private closed = false;
   private historyPending = false;
   private stopReleased = false;
+  private stopTermination: Promise<TerminateWithTreeKillResult | "none"> = Promise.resolve("none");
   private readonly catalogProviderId?: string;
   private replayingHistory = false;
   private bootstrapThreadEventPending = false;
@@ -2519,9 +2520,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       return;
     }
 
+    const turnId = this.activeForegroundTurnId;
+    if (this.stopKillsProcess()) {
+      // Late permission and session events must not surface while this process is dying.
+      this.stopReleased = true;
+    }
     this.cancelPendingPermissions();
 
-    const turnId = this.activeForegroundTurnId;
     if (turnId && this.stopKillsProcess()) {
       const cancel = this.connection.cancel({ sessionId: this.sessionId }).catch(() => undefined);
       try {
@@ -2537,7 +2542,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
 
     const child = this.child;
-    this.stopReleased = true;
     this.connection = null;
     this.child = null;
     if (turnId && this.activeForegroundTurnId === turnId) {
@@ -2550,15 +2554,22 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       });
     }
     if (child) {
-      void this.terminateProcess(child, { gracefulTimeoutMs: 200, forceTimeoutMs: 500 }).catch(
-        (error: unknown) => {
-          this.logger.warn({ err: error }, "ACP stop failed to terminate the provider process");
-        },
-      );
+      // interrupt has to return inside the manager's 2s window. The next message waits.
+      this.stopTermination = this.terminateProcess(child, {
+        gracefulTimeoutMs: 200,
+        forceTimeoutMs: 500,
+      }).catch((error: unknown) => {
+        this.logger.warn({ err: error }, "ACP stop failed to terminate the provider process");
+        return "kill-timeout";
+      });
     }
   }
 
   private async resumeAfterStop(): Promise<void> {
+    const termination = await this.stopTermination;
+    if (termination === "kill-timeout") {
+      throw new Error("ACP stop did not exit the provider process");
+    }
     if (!this.initialHandle && this.sessionId) {
       this.initialHandle = {
         provider: this.provider,
@@ -2630,6 +2641,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    if (this.stopReleased) {
+      return { outcome: { outcome: "cancelled" } };
+    }
+
     const canAutoAccept =
       isACPAutoAcceptEnabled(this.config) && !isACPChooserRequest(params.options);
     if (canAutoAccept) {

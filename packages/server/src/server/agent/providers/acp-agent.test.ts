@@ -4546,10 +4546,14 @@ describe("ACP stop releases a Grok process that continues after cancel", () => {
   function createStopSession(
     provider: string,
     terminator: FakeTerminator,
-    options: { catalogProviderId?: string; command?: [string, ...string[]] } = {},
+    options: {
+      catalogProviderId?: string;
+      command?: [string, ...string[]];
+      featureValues?: Record<string, unknown>;
+    } = {},
   ): ACPAgentSession {
     return new ACPAgentSession(
-      { provider, cwd: "/tmp/paseo-acp-test" },
+      { provider, cwd: "/tmp/paseo-acp-test", featureValues: options.featureValues },
       {
         provider,
         logger: createTestLogger(),
@@ -4921,3 +4925,157 @@ describe("ACP stop releases a Grok process that continues after cancel", () => {
     expect(internals.child).toBe(child);
     expect(internals.activeForegroundTurnId).toBe(turnId);
   });
+
+  test("the next grok message waits until the stopped process exits", async () => {
+    const terminator = new FakeTerminator("deferred");
+    const nextPrompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+    const loadSession = vi.fn(async () => ({
+      sessionId: "session-1",
+      modes: null,
+      models: null,
+      configOptions: [],
+    }));
+    let spawned = 0;
+
+    class ResumeAfterKillSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        spawned += 1;
+        return {
+          child: createProbeChildStub(),
+          connection: {
+            prompt: nextPrompt,
+            cancel: vi.fn().mockResolvedValue(undefined),
+            loadSession,
+          } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: { loadSession: true } },
+        } as SpawnedACPProcess;
+      }
+    }
+
+    const session = new ResumeAfterKillSession(
+      { provider: "grok", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "grok",
+        logger: createTestLogger(),
+        defaultCommand: ["grok", "agent", "stdio"],
+        defaultModes: [],
+        capabilities: sessionCapabilities,
+        terminateProcess: terminator.terminate,
+      },
+    );
+    const child = createProbeChildStub();
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.child = child;
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await session.startTurn("stop this");
+    await session.interrupt();
+    const next = session.startTurn("continue");
+    await flushTurns();
+
+    expect(terminator.terminated).toContain(child);
+    expect(spawned).toBe(0);
+    expect(loadSession).not.toHaveBeenCalled();
+
+    terminator.releaseAll();
+    await next;
+
+    expect(spawned).toBe(1);
+    expect(loadSession).toHaveBeenCalledOnce();
+  });
+
+  test("a grok kill timeout does not start a second process", async () => {
+    const terminate: ProcessTerminator = async () => "kill-timeout";
+    let spawned = 0;
+
+    class ResumeAfterKillSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        spawned += 1;
+        return {
+          child: createProbeChildStub(),
+          connection: {
+            prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+            cancel: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: { loadSession: true } },
+        } as SpawnedACPProcess;
+      }
+    }
+
+    const session = new ResumeAfterKillSession(
+      { provider: "grok", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "grok",
+        logger: createTestLogger(),
+        defaultCommand: ["grok", "agent", "stdio"],
+        defaultModes: [],
+        capabilities: sessionCapabilities,
+        terminateProcess: terminate,
+      },
+    );
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.child = createProbeChildStub();
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await session.startTurn("stop this");
+    await session.interrupt();
+
+    await expect(session.startTurn("continue")).rejects.toThrow(
+      "ACP stop did not exit the provider process",
+    );
+    expect(spawned).toBe(0);
+    expect(internals.connection).toBeNull();
+  });
+
+  test("a permission request after grok stop is cancelled", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("grok", terminator, {
+      featureValues: { auto_accept: true },
+    });
+    const events: AgentStreamEvent[] = [];
+    let resolveCancel!: () => void;
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.child = createProbeChildStub();
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: () =>
+        new Promise<void>((resolve) => {
+          resolveCancel = resolve;
+        }),
+    };
+    session.subscribe((event) => {
+      events.push(event);
+    });
+
+    await session.startTurn("stop this");
+    const stopping = session.interrupt();
+    const response = await session.requestPermission({
+      sessionId: "session-1",
+      toolCall: {
+        toolCallId: "tool-1",
+        title: "Edit file",
+        kind: "edit",
+        status: "pending",
+      },
+      options: [
+        { optionId: "allow-once", name: "Allow", kind: "allow_once" },
+        { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+      ],
+    } satisfies RequestPermissionRequest);
+    resolveCancel();
+    await stopping;
+
+    expect(response).toEqual({ outcome: { outcome: "cancelled" } });
+    expect(events.some((event) => event.type === "permission_requested")).toBe(false);
+    expect(session.getPendingPermissions()).toEqual([]);
+  });
+});
