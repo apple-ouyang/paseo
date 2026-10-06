@@ -4988,6 +4988,60 @@ describe("ACP stop releases a Grok process that continues after cancel", () => {
     expect(loadSession).toHaveBeenCalledOnce();
   });
 
+  test("closing the agent while the next grok message waits does not start a process", async () => {
+    const terminator = new FakeTerminator("deferred");
+    let spawned = 0;
+
+    class ResumeAfterKillSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        spawned += 1;
+        return {
+          child: createProbeChildStub(),
+          connection: {
+            prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+            cancel: vi.fn().mockResolvedValue(undefined),
+            loadSession: vi.fn(async () => ({
+              sessionId: "session-1",
+              modes: null,
+              models: null,
+              configOptions: [],
+            })),
+          } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: { loadSession: true } },
+        } as SpawnedACPProcess;
+      }
+    }
+
+    const session = new ResumeAfterKillSession(
+      { provider: "grok", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "grok",
+        logger: createTestLogger(),
+        defaultCommand: ["grok", "agent", "stdio"],
+        defaultModes: [],
+        capabilities: sessionCapabilities,
+        terminateProcess: terminator.terminate,
+      },
+    );
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.child = createProbeChildStub();
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await session.startTurn("stop this");
+    await session.interrupt();
+    const next = session.startTurn("continue");
+    await flushTurns();
+    await session.close();
+    terminator.releaseAll();
+
+    await expect(next).rejects.toThrow("grok session is closed");
+    expect(spawned).toBe(0);
+  });
+
   test("a grok kill timeout does not start a second process", async () => {
     const terminate: ProcessTerminator = async () => "kill-timeout";
     let spawned = 0;
