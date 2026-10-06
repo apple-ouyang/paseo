@@ -1932,6 +1932,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       if (this.stopReleased && !this.closed) {
         await this.resumeAfterStop();
       }
+      if (this.closed) {
+        throw new Error(`${this.provider} session is closed`);
+      }
       if (!this.connection || !this.sessionId) {
         throw new Error(`${this.provider} session is not initialized`);
       }
@@ -2567,6 +2570,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
   private async resumeAfterStop(): Promise<void> {
     const termination = await this.stopTermination;
+    if (this.closed) {
+      return;
+    }
     if (termination === "kill-timeout") {
       throw new Error("ACP stop did not exit the provider process");
     }
