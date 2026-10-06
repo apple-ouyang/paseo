@@ -131,6 +131,12 @@ import {
 import { withTimeout } from "../../../utils/promise-timeout.js";
 
 const ACP_AUTO_ACCEPT_FEATURE_ID = "auto_accept";
+const ACP_CANCEL_REQUEST_TIMEOUT_MS = 800;
+// Grok answers session/prompt with cancelled and then starts another internal
+// turn in the same process. A settled cancel is not a stopped agent.
+// Catalog Grok is a derived ACP provider: the session's own provider is "acp",
+// and the catalog id arrives separately as catalogProviderId.
+const ACP_STOP_KILLS_PROCESS = new Set<string>(["grok"]);
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -484,6 +490,7 @@ interface ACPAgentClientOptions {
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
   now?: () => number;
+  catalogProviderId?: string;
 }
 
 interface ACPAgentSessionOptions {
@@ -519,6 +526,7 @@ interface ACPAgentSessionOptions {
   waitForInitialCommands?: boolean;
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
+  catalogProviderId?: string;
 }
 
 export interface SpawnedACPProcess {
@@ -946,6 +954,7 @@ export class ACPAgentClient implements AgentClient {
   private readonly initialCommandsWaitTimeoutMs: number;
   private readonly extensionCommandsParser?: ACPExtensionCommandsParser;
   private readonly importPromptCache = new Map<string, ACPImportPromptCacheEntry>();
+  private readonly catalogProviderId?: string;
   private readonly now: () => number;
   protected readonly terminateProcess: ProcessTerminator;
 
@@ -975,6 +984,7 @@ export class ACPAgentClient implements AgentClient {
     this.waitForInitialCommands = options.waitForInitialCommands ?? false;
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
+    this.catalogProviderId = options.catalogProviderId;
     this.now = options.now ?? Date.now;
   }
 
@@ -1015,6 +1025,7 @@ export class ACPAgentClient implements AgentClient {
         extensionCommandsParser: this.extensionCommandsParser,
         waitForInitialCommands: this.waitForInitialCommands,
         initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
+        catalogProviderId: this.catalogProviderId,
       },
     );
     await session.initializeNewSession();
@@ -1074,6 +1085,7 @@ export class ACPAgentClient implements AgentClient {
       extensionCommandsParser: this.extensionCommandsParser,
       waitForInitialCommands: this.waitForInitialCommands,
       initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
+      catalogProviderId: this.catalogProviderId,
     });
     await session.initializeResumedSession();
     return session;
@@ -1722,7 +1734,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly toolCalls = new Map<string, ACPToolSnapshot>();
   private readonly terminalEntries = new Map<string, TerminalEntry>();
   private readonly persistedHistory: AgentTimelineItem[] = [];
-  private readonly initialHandle?: AgentPersistenceHandle;
+  private initialHandle?: AgentPersistenceHandle;
   private readonly resumePurpose: AgentResumePurpose;
 
   private readonly config: AgentSessionConfig;
@@ -1750,6 +1762,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private fallbackAssistantMessageId: string | null = null;
   private closed = false;
   private historyPending = false;
+  private stopReleased = false;
+  private readonly catalogProviderId?: string;
   private replayingHistory = false;
   private bootstrapThreadEventPending = false;
   private readonly terminateProcess: ProcessTerminator;
@@ -1787,6 +1801,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.waitForInitialCommands = options.waitForInitialCommands ?? false;
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
+    this.catalogProviderId = options.catalogProviderId;
+  }
+
+  private stopKillsProcess(): boolean {
+    return ACP_STOP_KILLS_PROCESS.has(this.catalogProviderId ?? this.provider);
   }
 
   get id(): string | null {
@@ -1909,7 +1928,12 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       throw new Error(`${this.provider} session is closed`);
     }
     if (!this.connection || !this.sessionId) {
-      throw new Error(`${this.provider} session is not initialized`);
+      if (this.stopReleased && !this.closed) {
+        await this.resumeAfterStop();
+      }
+      if (!this.connection || !this.sessionId) {
+        throw new Error(`${this.provider} session is not initialized`);
+      }
     }
     if (this.activeForegroundTurnId) {
       throw new Error("A foreground turn is already active");
@@ -1936,6 +1960,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         return;
       })
       .catch((error) => {
+        if (this.activeForegroundTurnId !== turnId) {
+          return;
+        }
         const summary = summarizeACPRequestError(error);
         this.finishTurn({
           type: "turn_failed",
@@ -2494,9 +2521,58 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
     this.cancelPendingPermissions();
 
-    if (this.activeForegroundTurnId) {
+    const turnId = this.activeForegroundTurnId;
+    if (turnId && this.stopKillsProcess()) {
+      const cancel = this.connection.cancel({ sessionId: this.sessionId }).catch(() => undefined);
+      try {
+        await withTimeout(cancel, ACP_CANCEL_REQUEST_TIMEOUT_MS, "ACP session/cancel timed out");
+      } catch {
+        // Stop still kills a provider that does not answer cancel.
+      }
+    } else if (turnId) {
       await this.connection.cancel({ sessionId: this.sessionId });
     }
+    if (!this.stopKillsProcess()) {
+      return;
+    }
+
+    const child = this.child;
+    this.stopReleased = true;
+    this.connection = null;
+    this.child = null;
+    if (turnId && this.activeForegroundTurnId === turnId) {
+      this.synthesizeCanceledToolCalls();
+      this.finishTurn({
+        type: "turn_canceled",
+        provider: this.provider,
+        reason: "Interrupted",
+        turnId,
+      });
+    }
+    if (child) {
+      void this.terminateProcess(child, { gracefulTimeoutMs: 200, forceTimeoutMs: 500 }).catch(
+        (error: unknown) => {
+          this.logger.warn({ err: error }, "ACP stop failed to terminate the provider process");
+        },
+      );
+    }
+  }
+
+  private async resumeAfterStop(): Promise<void> {
+    if (!this.initialHandle && this.sessionId) {
+      this.initialHandle = {
+        provider: this.provider,
+        sessionId: this.sessionId,
+        nativeHandle: this.sessionId,
+      };
+    }
+    const historyLength = this.persistedHistory.length;
+    const historyPending = this.historyPending;
+    await this.initializeResumedSession();
+    this.persistedHistory.length = historyLength;
+    this.historyPending = historyPending;
+    this.bootstrapThreadEventPending = false;
+    this.stopReleased = false;
   }
 
   async close(): Promise<void> {
@@ -2599,6 +2675,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
+    if (this.stopReleased) {
+      return;
+    }
     this.logger.trace(
       {
         agentId: this.agentId,
@@ -2841,7 +2920,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     });
     const spawnError = rejectOnSpawnError(child, stderrChunks);
     child.once("exit", (code, signal) => {
-      if (this.closed) {
+      if (this.closed || this.child !== child) {
         return;
       }
       if (this.activeForegroundTurnId) {
@@ -3251,6 +3330,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private handlePromptResponse(response: PromptResponse, turnId: string): void {
+    if (this.activeForegroundTurnId !== turnId) {
+      return;
+    }
     this.currentTurnUsage = mapACPUsage(response.usage) ?? this.currentTurnUsage;
 
     switch (response.stopReason) {
