@@ -4520,3 +4520,404 @@ describe("custom ACP provider with configured models", () => {
     expect((await created.getRuntimeInfo()).model).toBe("advertised-default");
   });
 });
+describe("ACP stop releases a Grok process that continues after cancel", () => {
+  const sessionCapabilities = {
+    supportsStreaming: true,
+    supportsSessionPersistence: true,
+    supportsDynamicModes: true,
+    supportsMcpServers: true,
+    supportsReasoningStream: true,
+    supportsToolInvocations: true,
+  };
+
+  interface StopInternals {
+    sessionId: string | null;
+    connection: {
+      prompt: (...args: unknown[]) => Promise<PromptResponse>;
+      cancel: (input: { sessionId: string }) => Promise<void>;
+    } | null;
+    child: ChildProcessWithoutNullStreams | null;
+    activeForegroundTurnId: string | null;
+    persistedHistory: Array<{ type: "user_message"; text: string }>;
+    historyPending: boolean;
+    stopReleased: boolean;
+  }
+
+  function createStopSession(
+    provider: string,
+    terminator: FakeTerminator,
+    options: { catalogProviderId?: string; command?: [string, ...string[]] } = {},
+  ): ACPAgentSession {
+    return new ACPAgentSession(
+      { provider, cwd: "/tmp/paseo-acp-test" },
+      {
+        provider,
+        logger: createTestLogger(),
+        defaultCommand:
+          options.command ??
+          (provider === "grok" ? ["grok", "agent", "stdio"] : ["claude", "--acp"]),
+        defaultModes: [],
+        capabilities: sessionCapabilities,
+        terminateProcess: terminator.terminate,
+        ...(options.catalogProviderId ? { catalogProviderId: options.catalogProviderId } : {}),
+      },
+    );
+  }
+
+  async function flushTurns(): Promise<void> {
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  test("grok interrupt cancels the turn, kills the process, and clears the lock", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("grok", terminator);
+    const child = createProbeChildStub();
+    const events: AgentStreamEvent[] = [];
+    let resolveCancel!: () => void;
+    const cancel = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCancel = resolve;
+        }),
+    );
+    const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = { prompt, cancel };
+    internals.child = child;
+    session.subscribe((event) => {
+      events.push(event);
+    });
+
+    const { turnId } = await session.startTurn("hello");
+    const stopping = session.interrupt();
+    resolveCancel();
+    await stopping;
+
+    expect(cancel).toHaveBeenCalledWith({ sessionId: "session-1" });
+    expect(terminator.terminated).toContain(child);
+    expect(events.filter((event) => event.type === "turn_canceled")).toEqual([
+      {
+        type: "turn_canceled",
+        provider: "grok",
+        reason: "Interrupted",
+        turnId,
+      },
+    ]);
+    expect(internals.activeForegroundTurnId).toBeNull();
+    expect(internals.connection).toBeNull();
+    expect(internals.child).toBeNull();
+    expect(internals.stopReleased).toBe(true);
+  });
+
+  test("grok interrupt still kills the process when cancel never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const terminator = new FakeTerminator();
+      const session = createStopSession("grok", terminator);
+      const child = createProbeChildStub();
+      const cancel = vi.fn(() => new Promise<void>(() => {}));
+      const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+      const internals = asInternals<StopInternals>(session);
+      internals.sessionId = "session-1";
+      internals.connection = { prompt, cancel };
+      internals.child = child;
+
+      await session.startTurn("hello");
+      const stopping = session.interrupt();
+      await vi.advanceTimersByTimeAsync(800);
+      await stopping;
+
+      expect(terminator.terminated).toContain(child);
+      expect(internals.activeForegroundTurnId).toBeNull();
+      expect(internals.connection).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("grok interrupt still kills the process after prompt already resolved cancelled", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("grok", terminator);
+    const child = createProbeChildStub();
+    const events: AgentStreamEvent[] = [];
+    let resolvePrompt!: (value: PromptResponse) => void;
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const prompt = vi.fn(
+      () =>
+        new Promise<PromptResponse>((resolve) => {
+          resolvePrompt = resolve;
+        }),
+    );
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = { prompt, cancel };
+    internals.child = child;
+    session.subscribe((event) => {
+      events.push(event);
+    });
+
+    await session.startTurn("hello");
+    resolvePrompt({ stopReason: "cancelled" });
+    await flushTurns();
+
+    expect(events.filter((event) => event.type === "turn_canceled")).toHaveLength(1);
+    expect(internals.activeForegroundTurnId).toBeNull();
+
+    await session.interrupt();
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(terminator.terminated).toContain(child);
+    expect(events.filter((event) => event.type === "turn_canceled")).toHaveLength(1);
+    expect(internals.connection).toBeNull();
+  });
+
+  test("a late prompt rejection after grok interrupt does not emit turn_failed", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("grok", terminator);
+    const events: AgentStreamEvent[] = [];
+    let rejectPrompt!: (error: Error) => void;
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const prompt = vi.fn(
+      () =>
+        new Promise<PromptResponse>((_resolve, reject) => {
+          rejectPrompt = reject;
+        }),
+    );
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = { prompt, cancel };
+    internals.child = createProbeChildStub();
+    session.subscribe((event) => {
+      events.push(event);
+    });
+
+    await session.startTurn("hello");
+    await session.interrupt();
+    rejectPrompt(new Error("session closed"));
+    await flushTurns();
+
+    expect(events.filter((event) => event.type === "turn_failed")).toEqual([]);
+    expect(events.filter((event) => event.type === "turn_canceled")).toHaveLength(1);
+  });
+
+  test("grok interrupt drops session updates until the next turn reloads", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("grok", terminator);
+    const events: AgentStreamEvent[] = [];
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.child = createProbeChildStub();
+    session.subscribe((event) => {
+      events.push(event);
+    });
+
+    await session.startTurn("hello");
+    await session.interrupt();
+    const countAfterStop = events.length;
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "late-1",
+        content: { type: "text", text: "still working" },
+      } as SessionUpdate,
+    });
+
+    expect(events).toHaveLength(countAfterStop);
+    expect(
+      events.some((event) => event.type === "timeline" && event.item.type === "assistant_message"),
+    ).toBe(false);
+  });
+
+  test("claude-acp interrupt leaves the process and the foreground lock in place", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("claude-acp", terminator);
+    const child = createProbeChildStub();
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel,
+    };
+    internals.child = child;
+
+    const { turnId } = await session.startTurn("hello");
+    await session.interrupt();
+
+    expect(cancel).toHaveBeenCalledWith({ sessionId: "session-1" });
+    expect(terminator.terminated).toEqual([]);
+    expect(internals.connection).not.toBeNull();
+    expect(internals.child).toBe(child);
+    expect(internals.activeForegroundTurnId).toBe(turnId);
+    expect(internals.stopReleased).toBe(false);
+    await expect(session.startTurn("again")).rejects.toThrow("A foreground turn is already active");
+  });
+
+  test("claude-acp interrupt still rejects when cancel fails", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("claude-acp", terminator);
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockRejectedValue(new Error("cancel refused")),
+    };
+    internals.child = createProbeChildStub();
+
+    const { turnId } = await session.startTurn("hello");
+
+    await expect(session.interrupt()).rejects.toThrow("cancel refused");
+    expect(terminator.terminated).toEqual([]);
+    expect(internals.connection).not.toBeNull();
+    expect(internals.activeForegroundTurnId).toBe(turnId);
+  });
+
+  test("the next grok turn reloads the session without duplicating history", async () => {
+    const terminator = new FakeTerminator();
+    const nextPrompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+    let session!: ACPAgentSession;
+    const loadSession = vi.fn(async () => {
+      await session.sessionUpdate({
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "replay-should-drop",
+          content: { type: "text", text: "replayed history" },
+        } as SessionUpdate,
+      });
+      return {
+        sessionId: "session-1",
+        modes: null,
+        models: null,
+        configOptions: [],
+      };
+    });
+
+    class ResumeAfterStopSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        return {
+          child: createProbeChildStub(),
+          connection: {
+            prompt: nextPrompt,
+            cancel: vi.fn().mockResolvedValue(undefined),
+            loadSession,
+          } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: { loadSession: true } },
+        } as SpawnedACPProcess;
+      }
+    }
+
+    session = new ResumeAfterStopSession(
+      { provider: "grok", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "grok",
+        logger: createTestLogger(),
+        defaultCommand: ["grok", "agent", "stdio"],
+        defaultModes: [],
+        capabilities: sessionCapabilities,
+        terminateProcess: terminator.terminate,
+      },
+    );
+
+    const events: AgentStreamEvent[] = [];
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.persistedHistory.push({ type: "user_message", text: "earlier" });
+    internals.historyPending = false;
+    internals.child = createProbeChildStub();
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    session.subscribe((event) => {
+      events.push(event);
+    });
+
+    await session.startTurn("stop this");
+    await session.interrupt();
+    const { turnId } = await session.startTurn("continue");
+
+    expect(loadSession).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      cwd: "/tmp/paseo-acp-test",
+      mcpServers: [],
+    });
+    expect(nextPrompt).toHaveBeenCalledOnce();
+    expect(internals.historyPending).toBe(false);
+    expect(internals.persistedHistory).toEqual([{ type: "user_message", text: "earlier" }]);
+    expect(internals.activeForegroundTurnId).toBe(turnId);
+    expect(internals.stopReleased).toBe(false);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "timeline" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "replayed history",
+      ),
+    ).toBe(false);
+    expect(events.filter((event) => event.type === "thread_started")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "turn_failed")).toEqual([]);
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+    expect(history).toEqual([]);
+  });
+
+  test("catalog grok uses provider acp internally and still kills the process", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("acp", terminator, {
+      catalogProviderId: "grok",
+      command: ["grok", "agent", "stdio"],
+    });
+    const child = createProbeChildStub();
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.child = child;
+
+    const { turnId } = await session.startTurn("hello");
+    await session.interrupt();
+
+    expect(session.provider).toBe("acp");
+    expect(terminator.terminated).toContain(child);
+    expect(internals.activeForegroundTurnId).toBeNull();
+    expect(internals.connection).toBeNull();
+    expect(turnId).toEqual(expect.any(String));
+  });
+
+  test("another catalog ACP provider does not kill the process on stop", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("acp", terminator, {
+      catalogProviderId: "kimi",
+      command: ["kimi", "acp"],
+    });
+    const child = createProbeChildStub();
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.child = child;
+
+    const { turnId } = await session.startTurn("hello");
+    await session.interrupt();
+
+    expect(terminator.terminated).toEqual([]);
+    expect(internals.connection).not.toBeNull();
+    expect(internals.child).toBe(child);
+    expect(internals.activeForegroundTurnId).toBe(turnId);
+  });
