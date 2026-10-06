@@ -659,6 +659,7 @@ export const ru: TranslationResources = {
         close: "Закрыть",
         renameTerminal: "Переименовать терминал",
         renameAgent: "Переименовать агента",
+        aiRenameAgent: "Переименовать с помощью ИИ",
       },
       actions: {
         newTab: "Новая вкладка",
@@ -697,6 +698,7 @@ export const ru: TranslationResources = {
         reloadingAgent: "Перезагрузка агента...",
         reloadedAgent: "Агент перезагружен",
         failedToReloadAgent: "Не удалось перезагрузить агента",
+        failedToRetitleAgent: "Не удалось переименовать агента",
         failedToCloseAgent: "Не удалось закрыть агента",
       },
       confirmations: {
