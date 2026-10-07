@@ -5,8 +5,8 @@ import { useSessionStore } from "@/stores/session-store";
 import { deriveSidebarStateBucket, type SidebarStateBucket } from "@/utils/sidebar-agent-state";
 import {
   providerSubagentKey,
-  refreshProviderSubagents,
   useProviderSubagentStore,
+  watchProviderSubagentParent,
 } from "./provider-store";
 
 /**
@@ -49,9 +49,8 @@ export function useHasRunningProviderSubagent(parent: {
   useEffect(() => {
     if (!client || !supported) return;
     // A remount (command center scroll, list recycle) must not ask again. The panel still can.
-    void refreshProviderSubagents(client, parent.serverId, parent.parentAgentId, {
-      once: true,
-    }).catch(() => undefined);
+    // A reconnect clears this cache and refreshes parents that are still mounted.
+    return watchProviderSubagentParent(client, parent.serverId, parent.parentAgentId);
   }, [client, parent.parentAgentId, parent.serverId, supported]);
 
   return hasRunning;

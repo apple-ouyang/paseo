@@ -76,30 +76,61 @@ interface ProviderSubagentListClient {
   ) => Promise<{ subagents: ProviderSubagentDescriptorPayload[] }>;
 }
 
-const pendingListRequests = new WeakMap<ProviderSubagentListClient, Map<string, Promise<void>>>();
+interface InflightProviderSubagentList {
+  epoch: number;
+  promise: Promise<void>;
+}
+
+const pendingListRequests = new WeakMap<
+  ProviderSubagentListClient,
+  Map<string, InflightProviderSubagentList>
+>();
 const loadedParents = new WeakMap<ProviderSubagentListClient, Set<string>>();
+const loadEpochByClient = new WeakMap<ProviderSubagentListClient, number>();
+const mountedParents = new WeakMap<ProviderSubagentListClient, Map<string, number>>();
 
 let listWriteGeneration = 0;
+let inFlightLists = 0;
 const liveGenerationByKey = new Map<string, number>();
 const removedGenerationByKey = new Map<string, number>();
 
 function noteLiveDescriptor(key: string): void {
   listWriteGeneration += 1;
+  // A stamp only matters for a list that is already open. Idle writes would never beat
+  // the next snapshot, and keeping them grows these maps for the life of the app.
+  if (inFlightLists === 0) return;
   liveGenerationByKey.set(key, listWriteGeneration);
   removedGenerationByKey.delete(key);
 }
 
 function noteRemovedDescriptor(key: string): void {
   listWriteGeneration += 1;
+  if (inFlightLists === 0) return;
   liveGenerationByKey.delete(key);
   removedGenerationByKey.set(key, listWriteGeneration);
+}
+
+function finishListRequest(): void {
+  if (inFlightLists > 0) inFlightLists -= 1;
+  if (inFlightLists > 0) return;
+  liveGenerationByKey.clear();
+  removedGenerationByKey.clear();
+}
+
+function clientLoadEpoch(client: ProviderSubagentListClient): number {
+  return loadEpochByClient.get(client) ?? 0;
 }
 
 /** Drops list-freshness stamps so one test cannot leak into the next. */
 export function resetProviderSubagentListFreshness(): void {
   listWriteGeneration = 0;
+  inFlightLists = 0;
   liveGenerationByKey.clear();
   removedGenerationByKey.clear();
+}
+
+export function providerSubagentFreshnessSize(): { live: number; removed: number } {
+  return { live: liveGenerationByKey.size, removed: removedGenerationByKey.size };
 }
 
 export interface ProviderSubagentListFreshness {
@@ -122,14 +153,21 @@ export function refreshProviderSubagents(
     clientRequests = new Map();
     pendingListRequests.set(client, clientRequests);
   }
+  const epoch = clientLoadEpoch(client);
   const pending = clientRequests.get(requestKey);
-  if (pending) return pending;
+  if (pending?.epoch === epoch) return pending.promise;
 
   useProviderSubagentStore.getState().trackParent(serverId, parentAgentId);
+  inFlightLists += 1;
   const snapshotGeneration = listWriteGeneration;
-  const request = client
+  const entry: InflightProviderSubagentList = {
+    epoch,
+    promise: Promise.resolve(),
+  };
+  entry.promise = client
     .listProviderSubagents(parentAgentId)
     .then((payload) => {
+      if (clientLoadEpoch(client) !== epoch) return undefined;
       useProviderSubagentStore.getState().replaceList(serverId, parentAgentId, payload.subagents, {
         snapshotGeneration,
       });
@@ -142,10 +180,58 @@ export function refreshProviderSubagents(
       return undefined;
     })
     .finally(() => {
-      clientRequests?.delete(requestKey);
+      finishListRequest();
+      if (clientRequests?.get(requestKey) === entry) clientRequests.delete(requestKey);
     });
-  clientRequests.set(requestKey, request);
-  return request;
+  clientRequests.set(requestKey, entry);
+  return entry.promise;
+}
+
+function parentRequestKey(serverId: string, parentAgentId: string): string {
+  return `${serverId}\0${parentAgentId}`;
+}
+
+/**
+ * Keeps a parent on the reconnect refresh list. Several surfaces can watch the same parent.
+ */
+export function watchProviderSubagentParent(
+  client: ProviderSubagentListClient,
+  serverId: string,
+  parentAgentId: string,
+): () => void {
+  const requestKey = parentRequestKey(serverId, parentAgentId);
+  let mounted = mountedParents.get(client);
+  if (!mounted) {
+    mounted = new Map();
+    mountedParents.set(client, mounted);
+  }
+  mounted.set(requestKey, (mounted.get(requestKey) ?? 0) + 1);
+  void refreshProviderSubagents(client, serverId, parentAgentId, { once: true }).catch(
+    () => undefined,
+  );
+  return () => {
+    const current = mountedParents.get(client);
+    if (!current) return;
+    const next = (current.get(requestKey) ?? 0) - 1;
+    if (next <= 0) current.delete(requestKey);
+    else current.set(requestKey, next);
+  };
+}
+
+/** Drops the once-cache and asks again for parents that are still on screen. */
+export function invalidateProviderSubagentLoads(client: ProviderSubagentListClient): void {
+  loadEpochByClient.set(client, clientLoadEpoch(client) + 1);
+  loadedParents.get(client)?.clear();
+  const mounted = mountedParents.get(client);
+  if (!mounted) return;
+  for (const requestKey of mounted.keys()) {
+    const splitAt = requestKey.indexOf("\0");
+    void refreshProviderSubagents(
+      client,
+      requestKey.slice(0, splitAt),
+      requestKey.slice(splitAt + 1),
+    ).catch(() => undefined);
+  }
 }
 
 function parentPrefix(serverId: string, parentAgentId: string): string {

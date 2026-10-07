@@ -1,14 +1,16 @@
 import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
 import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
 import { afterEach, describe, expect, test } from "vitest";
-import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
 import {
   observeProviderSubagentTimeline,
   providerSubagentKey,
+  invalidateProviderSubagentLoads,
+  providerSubagentFreshnessSize,
   refreshProviderSubagents,
   resetProviderSubagentListFreshness,
   resyncProviderSubagents,
   useProviderSubagentStore,
+  watchProviderSubagentParent,
 } from "./provider-store";
 
 const SERVER_ID = "server-1";
@@ -736,7 +738,7 @@ describe("projected child history", () => {
 });
 
 describe("resyncing after the update feed resubscribes", () => {
-  function child(
+  function resyncChild(
     id: string,
     parentAgentId: string,
     status: ProviderSubagentDescriptorPayload["status"],
@@ -779,14 +781,14 @@ describe("resyncing after the update feed resubscribes", () => {
       .descriptors.get(providerSubagentKey(SERVER_ID, parentAgentId, subagentId))?.status;
 
   test("catches up on children that finished or started while updates were not delivered", async () => {
-    const daemon = fakeDaemon({ [PARENT_ID]: [child("child-1", PARENT_ID, "running")] });
+    const daemon = fakeDaemon({ [PARENT_ID]: [resyncChild("child-1", PARENT_ID, "running")] });
     await refreshProviderSubagents(daemon.client, SERVER_ID, PARENT_ID);
     expect(status(PARENT_ID, "child-1")).toBe("running");
 
     // The connection dropped: the daemon finished child-1 and ran child-2 without telling us.
     daemon.lists[PARENT_ID] = [
-      child("child-1", PARENT_ID, "completed"),
-      child("child-2", PARENT_ID, "completed"),
+      resyncChild("child-1", PARENT_ID, "completed"),
+      resyncChild("child-2", PARENT_ID, "completed"),
     ];
     await resyncProviderSubagents(daemon.client, SERVER_ID);
 
@@ -806,11 +808,11 @@ describe("resyncing after the update feed resubscribes", () => {
     ).rejects.toBeInstanceOf(DaemonConnectionError);
     useProviderSubagentStore.getState().applyUpdate(SERVER_ID, {
       kind: "upsert",
-      subagent: child("child-1", PARENT_ID, "running"),
+      subagent: resyncChild("child-1", PARENT_ID, "running"),
     });
 
     // The connection dropped again: the daemon finished child-1 without telling us.
-    daemon.lists[PARENT_ID] = [child("child-1", PARENT_ID, "completed")];
+    daemon.lists[PARENT_ID] = [resyncChild("child-1", PARENT_ID, "completed")];
     await resyncProviderSubagents(daemon.client, SERVER_ID);
 
     expect(status(PARENT_ID, "child-1")).toBe("completed");
@@ -974,6 +976,87 @@ describe("provider subagent list freshness", () => {
       refreshProviderSubagents(client, SERVER_ID, PARENT_ID, { once: true }),
     ).rejects.toThrow("offline");
     await refreshProviderSubagents(client, SERVER_ID, PARENT_ID, { once: true });
+    expect(calls).toBe(2);
+  });
+
+  test("idle removes do not keep freshness keys", () => {
+    for (let index = 0; index < 20; index += 1) {
+      const id = `child-${index}`;
+      useProviderSubagentStore.getState().applyUpdate(SERVER_ID, {
+        kind: "upsert",
+        subagent: child(id, "running", "2026-07-12T10:00:00.000Z"),
+      });
+      useProviderSubagentStore.getState().applyUpdate(SERVER_ID, {
+        kind: "remove",
+        parentAgentId: PARENT_ID,
+        subagentId: id,
+      });
+    }
+
+    expect(providerSubagentFreshnessSize()).toEqual({ live: 0, removed: 0 });
+  });
+
+  test("a settled list drops freshness keys", async () => {
+    const pending = deferredList();
+    const refresh = refreshProviderSubagents(
+      { listProviderSubagents: () => pending.promise },
+      SERVER_ID,
+      PARENT_ID,
+    );
+    useProviderSubagentStore.getState().applyUpdate(SERVER_ID, {
+      kind: "upsert",
+      subagent: child("child-1", "running", "2026-07-12T10:00:04.000Z"),
+    });
+    expect(providerSubagentFreshnessSize().live).toBe(1);
+    pending.resolve({ subagents: [] });
+    await refresh;
+
+    expect(providerSubagentFreshnessSize()).toEqual({ live: 0, removed: 0 });
+    expect(
+      useProviderSubagentStore
+        .getState()
+        .descriptors.has(providerSubagentKey(SERVER_ID, PARENT_ID, "child-1")),
+    ).toBe(true);
+  });
+
+  test("reconnect reloads a mounted parent and ignores the list that started earlier", async () => {
+    const first = deferredList();
+    const second = deferredList();
+    let calls = 0;
+    const client = {
+      listProviderSubagents: () => {
+        calls += 1;
+        return calls === 1 ? first.promise : second.promise;
+      },
+    };
+    const stop = watchProviderSubagentParent(client, SERVER_ID, PARENT_ID);
+    const stopAgain = watchProviderSubagentParent(client, SERVER_ID, PARENT_ID);
+    expect(calls).toBe(1);
+
+    invalidateProviderSubagentLoads(client);
+    expect(calls).toBe(2);
+
+    first.resolve({
+      subagents: [child("child-1", "running", "2026-07-12T10:00:00.000Z")],
+    });
+    second.resolve({
+      subagents: [child("child-1", "completed", "2026-07-12T10:00:05.000Z")],
+    });
+    await first.promise;
+    await second.promise;
+    await Promise.resolve();
+
+    expect(
+      useProviderSubagentStore
+        .getState()
+        .descriptors.get(providerSubagentKey(SERVER_ID, PARENT_ID, "child-1"))?.status,
+    ).toBe("completed");
+
+    stop();
+    await refreshProviderSubagents(client, SERVER_ID, PARENT_ID, { once: true });
+    expect(calls).toBe(2);
+    stopAgain();
+    invalidateProviderSubagentLoads(client);
     expect(calls).toBe(2);
   });
 });
