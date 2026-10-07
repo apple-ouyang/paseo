@@ -295,6 +295,7 @@ export const ko: TranslationResources = {
   },
   agentList: {
     fallbackTitle: "새 세션",
+    filterByProject: "{{project}} 기록으로 필터",
     dateSections: {
       recent: "최근",
       today: "오늘",

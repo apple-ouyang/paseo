@@ -294,6 +294,7 @@ export const ar: TranslationResources = {
   },
   agentList: {
     fallbackTitle: "جلسة جديدة",
+    filterByProject: "تصفية السجل حسب {{project}}",
     dateSections: {
       recent: "مؤخرًا",
       today: "اليوم",

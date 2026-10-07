@@ -299,6 +299,7 @@ export const ja: TranslationResources = {
   },
   agentList: {
     fallbackTitle: "新しいセッション",
+    filterByProject: "{{project}} の履歴で絞り込み",
     dateSections: {
       recent: "最近",
       today: "今日",

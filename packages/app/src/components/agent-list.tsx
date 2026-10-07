@@ -172,6 +172,7 @@ function SessionRowProjectCell({
   agent: AggregatedAgent;
   onProjectPress?: (agent: AggregatedAgent) => void;
 }): ReactElement {
+  const { t } = useTranslation();
   const handleProjectPress = useCallback(() => onProjectPress?.(agent), [onProjectPress, agent]);
   const text = (
     <HighlightedText
@@ -188,6 +189,8 @@ function SessionRowProjectCell({
   return (
     <Pressable
       onPress={handleProjectPress}
+      accessibilityRole="button"
+      accessibilityLabel={t("agentList.filterByProject", { project: projectName })}
       testID={`agent-row-project-filter-${agent.serverId}-${agent.id}`}
     >
       {text}

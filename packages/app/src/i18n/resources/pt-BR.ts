@@ -298,6 +298,7 @@ export const ptBR: TranslationResources = {
   },
   agentList: {
     fallbackTitle: "Nova sessão",
+    filterByProject: "Filtrar histórico por {{project}}",
     dateSections: {
       recent: "Recentes",
       today: "Hoje",

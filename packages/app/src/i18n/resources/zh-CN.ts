@@ -294,6 +294,7 @@ export const zhCN: TranslationResources = {
   },
   agentList: {
     fallbackTitle: "新会话",
+    filterByProject: "只看 {{project}} 的会话",
     dateSections: {
       recent: "最近",
       today: "今天",

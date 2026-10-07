@@ -60,15 +60,21 @@ function SessionHostErrorsBanner({
 function SessionsEmptyState({
   emptyText,
   isSearching,
+  hasMore,
+  isLoadingMore,
   onClearSearch,
   onBack,
   onImport,
+  onLoadMore,
 }: {
   emptyText: string;
   isSearching: boolean;
+  hasMore: boolean;
+  isLoadingMore: boolean;
   onClearSearch: () => void;
   onBack: () => void;
   onImport: () => void;
+  onLoadMore: () => void;
 }): ReactElement {
   const { t } = useTranslation();
   return (
@@ -83,6 +89,11 @@ function SessionsEmptyState({
           Back
         </Button>
       )}
+      {hasMore ? (
+        <Button variant="ghost" onPress={onLoadMore} disabled={isLoadingMore}>
+          {isLoadingMore ? "Loading..." : t("sessions.actions.loadMore")}
+        </Button>
+      ) : null}
       <Button variant="ghost" leftIcon={Import} onPress={onImport}>
         {t("importSession.title")}
       </Button>
@@ -318,9 +329,12 @@ function SessionsScreenContent() {
         <SessionsEmptyState
           emptyText={emptyText}
           isSearching={isSearching}
+          hasMore={hasMore}
+          isLoadingMore={isLoadingMore}
           onClearSearch={handleClearSearch}
           onBack={handleBack}
           onImport={importSession.open}
+          onLoadMore={loadMore}
         />
       ) : null}
       {!isInitialLoad && !showLoadError && visibleAgents.length > 0 ? (

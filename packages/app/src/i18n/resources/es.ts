@@ -299,6 +299,7 @@ export const es: TranslationResources = {
   },
   agentList: {
     fallbackTitle: "Nueva sesión",
+    filterByProject: "Filtrar el historial por {{project}}",
     dateSections: {
       recent: "Reciente",
       today: "Hoy",

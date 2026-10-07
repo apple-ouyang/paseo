@@ -298,6 +298,7 @@ export const ru: TranslationResources = {
   },
   agentList: {
     fallbackTitle: "Новая сессия",
+    filterByProject: "Фильтровать историю по {{project}}",
     dateSections: {
       recent: "Недавние",
       today: "Сегодня",

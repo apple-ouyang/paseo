@@ -291,6 +291,7 @@ export const en = {
   },
   agentList: {
     fallbackTitle: "New session",
+    filterByProject: "Filter history by {{project}}",
     dateSections: {
       recent: "Recent",
       today: "Today",
