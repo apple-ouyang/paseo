@@ -2553,15 +2553,25 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       const child = this.child;
       this.connection = null;
       this.child = null;
+      // A command from createTerminal is a sibling of Grok. Killing Grok does not
+      // stop it, and the dead connection can no longer call releaseTerminal.
+      // interrupt has to return inside the manager's 2s window. The next message waits.
+      const terminations = this.stopOwnedTerminals();
       if (child) {
-        // interrupt has to return inside the manager's 2s window. The next message waits.
-        this.stopTermination = this.terminateProcess(child, {
-          gracefulTimeoutMs: 200,
-          forceTimeoutMs: 500,
-        }).catch((error: unknown) => {
-          this.logger.warn({ err: error }, "ACP stop failed to terminate the provider process");
-          return "kill-timeout";
-        });
+        terminations.push(
+          this.terminateProcess(child, {
+            gracefulTimeoutMs: 200,
+            forceTimeoutMs: 500,
+          }).catch((error: unknown) => {
+            this.logger.warn({ err: error }, "ACP stop failed to terminate the provider process");
+            return "kill-timeout" as const;
+          }),
+        );
+      }
+      if (terminations.length > 0) {
+        this.stopTermination = Promise.all(terminations).then((results) =>
+          results.includes("kill-timeout") ? "kill-timeout" : results[0]!,
+        );
       }
       if (turnId && this.activeForegroundTurnId === turnId) {
         this.synthesizeCanceledToolCalls();
@@ -2588,6 +2598,23 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     const release = this.releaseStopGate;
     this.releaseStopGate = null;
     release?.();
+  }
+
+  private stopOwnedTerminals(): Array<Promise<TerminateWithTreeKillResult>> {
+    const entries = Array.from(this.terminalEntries.values());
+    this.terminalEntries.clear();
+    return entries.map((terminal) =>
+      this.terminateProcess(terminal.child, {
+        gracefulTimeoutMs: 200,
+        forceTimeoutMs: 500,
+      }).catch((error: unknown) => {
+        this.logger.warn(
+          { err: error, terminalId: terminal.id },
+          "ACP stop failed to terminate a terminal",
+        );
+        return "kill-timeout" as const;
+      }),
+    );
   }
 
   private async waitForStopToSettle(): Promise<void> {
