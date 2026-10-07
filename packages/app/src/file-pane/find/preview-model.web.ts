@@ -240,17 +240,23 @@ export class PreviewFindModel {
       this.matchMarks.push([]);
       hits.push({ start: found.index, end: found.index + found[0].length, match: index });
     }
+    // hits are sorted by start and nodes by document order, so a moving
+    // cursor skips dead hits once instead of scanning the whole list per node.
+    let first = 0;
     for (let i = 0; i < block.nodes.length; i++) {
       const node = block.nodes[i];
       const nodeStart = block.starts[i];
       const nodeEnd = nodeStart + node.data.length;
-      const ranges = hits
-        .filter((hit) => hit.start < nodeEnd && hit.end > nodeStart)
-        .map((hit) => ({
+      while (first < hits.length && hits[first].end <= nodeStart) first++;
+      const ranges: { start: number; end: number; match: number }[] = [];
+      for (let j = first; j < hits.length && hits[j].start < nodeEnd; j++) {
+        const hit = hits[j];
+        ranges.push({
           start: Math.max(hit.start, nodeStart) - nodeStart,
           end: Math.min(hit.end, nodeEnd) - nodeStart,
           match: hit.match,
-        }));
+        });
+      }
       if (!ranges.length) continue;
       const data = node.data;
       const fragment = document.createDocumentFragment();
