@@ -285,6 +285,13 @@ export const ja: TranslationResources = {
     tooManyMatches: "一致が多すぎます — 検索条件を絞ってください",
     hostLoadFailed: "{{host}}: 履歴を読み込めませんでした",
     searchPlaceholder: "履歴を検索",
+    projectFilter: {
+      label: "プロジェクト",
+      all: "すべてのプロジェクト",
+      title: "プロジェクトで絞り込み",
+      empty: "読み込み済みの履歴にプロジェクトがありません",
+      emptyFiltered: "読み込み済みのページに {{project}} のセッションがありません",
+    },
     actions: {
       loadMore: "さらに読み込む",
       clearSearch: "検索をクリア",

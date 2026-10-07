@@ -277,6 +277,13 @@ export const en = {
     tooManyMatches: "Too many matches — narrow your search",
     hostLoadFailed: "{{host}}: Could not load history",
     searchPlaceholder: "Search history",
+    projectFilter: {
+      label: "Project",
+      all: "All projects",
+      title: "Filter by project",
+      empty: "No projects in the loaded history",
+      emptyFiltered: "No sessions for {{project}} in the loaded pages",
+    },
     actions: {
       loadMore: "Load more",
       clearSearch: "Clear search",
