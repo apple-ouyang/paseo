@@ -117,6 +117,15 @@ describe("deriveAgentBucketWithSubagentActivity", () => {
     ).toBe("failed");
   });
 
+  it("keeps an error status louder than a busy child when no attention reason is set", () => {
+    expect(
+      deriveAgentBucketWithSubagentActivity({
+        agent: { status: "error", requiresAttention: false },
+        hasRunningProviderSubagent: true,
+      }),
+    ).toBe("failed");
+  });
+
   it("keeps a pending permission louder than a busy child", () => {
     expect(
       deriveAgentBucketWithSubagentActivity({

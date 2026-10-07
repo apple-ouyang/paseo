@@ -1,3 +1,4 @@
+import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
 import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
 import { afterEach, describe, expect, test } from "vitest";
 import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
@@ -5,6 +6,7 @@ import {
   observeProviderSubagentTimeline,
   providerSubagentKey,
   refreshProviderSubagents,
+  resetProviderSubagentListFreshness,
   resyncProviderSubagents,
   useProviderSubagentStore,
 } from "./provider-store";
@@ -14,6 +16,7 @@ const PARENT_ID = "parent-1";
 const SUBAGENT_ID = "child-1";
 
 afterEach(() => {
+  resetProviderSubagentListFreshness();
   useProviderSubagentStore.setState({
     descriptors: new Map(),
     timelines: new Map(),
@@ -822,5 +825,155 @@ describe("resyncing after the update feed resubscribes", () => {
     await resyncProviderSubagents(daemon.client, SERVER_ID);
 
     expect(daemon.requested).toEqual([PARENT_ID]);
+  });
+});
+
+function child(
+  id: string,
+  status: ProviderSubagentDescriptorPayload["status"],
+  updatedAt: string,
+): ProviderSubagentDescriptorPayload {
+  return {
+    id,
+    parentAgentId: PARENT_ID,
+    provider: "codex",
+    title: id,
+    description: null,
+    status,
+    createdAt: "2026-07-12T10:00:00.000Z",
+    updatedAt,
+    toolCallId: null,
+  };
+}
+
+function deferredList() {
+  let resolve: (value: { subagents: ProviderSubagentDescriptorPayload[] }) => void = () =>
+    undefined;
+  const promise = new Promise<{ subagents: ProviderSubagentDescriptorPayload[] }>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe("provider subagent list freshness", () => {
+  test("keeps a newer child update when an older list returns", async () => {
+    const listed = child("child-1", "running", "2026-07-12T10:00:00.000Z");
+    useProviderSubagentStore
+      .getState()
+      .applyUpdate(SERVER_ID, { kind: "upsert", subagent: listed });
+    const pending = deferredList();
+    const refresh = refreshProviderSubagents(
+      { listProviderSubagents: () => pending.promise },
+      SERVER_ID,
+      PARENT_ID,
+    );
+    useProviderSubagentStore.getState().applyUpdate(SERVER_ID, {
+      kind: "upsert",
+      subagent: child("child-1", "completed", "2026-07-12T10:00:02.000Z"),
+    });
+    pending.resolve({ subagents: [listed] });
+    await refresh;
+
+    expect(
+      useProviderSubagentStore
+        .getState()
+        .descriptors.get(providerSubagentKey(SERVER_ID, PARENT_ID, "child-1"))?.status,
+    ).toBe("completed");
+  });
+
+  test("keeps a child that starts while the list is in flight", async () => {
+    const pending = deferredList();
+    const refresh = refreshProviderSubagents(
+      { listProviderSubagents: () => pending.promise },
+      SERVER_ID,
+      PARENT_ID,
+    );
+    useProviderSubagentStore.getState().applyUpdate(SERVER_ID, {
+      kind: "upsert",
+      subagent: child("child-2", "running", "2026-07-12T10:00:03.000Z"),
+    });
+    pending.resolve({ subagents: [] });
+    await refresh;
+
+    expect(
+      useProviderSubagentStore
+        .getState()
+        .descriptors.has(providerSubagentKey(SERVER_ID, PARENT_ID, "child-2")),
+    ).toBe(true);
+  });
+
+  test("does not restore a child removed while the list is in flight", async () => {
+    const listed = child("child-1", "running", "2026-07-12T10:00:00.000Z");
+    useProviderSubagentStore
+      .getState()
+      .applyUpdate(SERVER_ID, { kind: "upsert", subagent: listed });
+    const pending = deferredList();
+    const refresh = refreshProviderSubagents(
+      { listProviderSubagents: () => pending.promise },
+      SERVER_ID,
+      PARENT_ID,
+    );
+    useProviderSubagentStore.getState().applyUpdate(SERVER_ID, {
+      kind: "remove",
+      parentAgentId: PARENT_ID,
+      subagentId: "child-1",
+    });
+    pending.resolve({ subagents: [listed] });
+    await refresh;
+
+    expect(
+      useProviderSubagentStore
+        .getState()
+        .descriptors.has(providerSubagentKey(SERVER_ID, PARENT_ID, "child-1")),
+    ).toBe(false);
+  });
+
+  test("drops a child the provider no longer lists when nothing changed in flight", async () => {
+    useProviderSubagentStore.getState().applyUpdate(SERVER_ID, {
+      kind: "upsert",
+      subagent: child("child-1", "completed", "2026-07-12T10:00:02.000Z"),
+    });
+    await refreshProviderSubagents(
+      { listProviderSubagents: async () => ({ subagents: [] }) },
+      SERVER_ID,
+      PARENT_ID,
+    );
+
+    expect(
+      useProviderSubagentStore
+        .getState()
+        .descriptors.has(providerSubagentKey(SERVER_ID, PARENT_ID, "child-1")),
+    ).toBe(false);
+  });
+
+  test("loads a parent once, then again when refresh is asked for", async () => {
+    let calls = 0;
+    const client = {
+      listProviderSubagents: async () => {
+        calls += 1;
+        return { subagents: [] };
+      },
+    };
+    await refreshProviderSubagents(client, SERVER_ID, PARENT_ID, { once: true });
+    await refreshProviderSubagents(client, SERVER_ID, PARENT_ID, { once: true });
+    expect(calls).toBe(1);
+    await refreshProviderSubagents(client, SERVER_ID, PARENT_ID);
+    expect(calls).toBe(2);
+  });
+
+  test("retries a parent after a failed load", async () => {
+    let calls = 0;
+    const client = {
+      listProviderSubagents: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("offline");
+        return { subagents: [] };
+      },
+    };
+    await expect(
+      refreshProviderSubagents(client, SERVER_ID, PARENT_ID, { once: true }),
+    ).rejects.toThrow("offline");
+    await refreshProviderSubagents(client, SERVER_ID, PARENT_ID, { once: true });
+    expect(calls).toBe(2);
   });
 });

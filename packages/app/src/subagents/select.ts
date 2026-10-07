@@ -155,9 +155,9 @@ export function useSubagentsForParent(params: SelectSubagentsParams): SubagentRo
 
   useEffect(() => {
     if (!client || !supported) return;
-    void refreshProviderSubagents(client, params.serverId, params.parentAgentId).catch(
-      () => undefined,
-    );
+    void refreshProviderSubagents(client, params.serverId, params.parentAgentId, {
+      once: true,
+    }).catch(() => undefined);
   }, [client, params.parentAgentId, params.serverId, supported]);
 
   return useMemo(() => {

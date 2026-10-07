@@ -559,6 +559,8 @@ function AgentResultContent({ result }: { result: CommandCenterAgentResult }) {
           <AgentStatusDot
             status={agent.status}
             requiresAttention={agent.requiresAttention}
+            attentionReason={agent.attentionReason}
+            pendingPermissionCount={agent.pendingPermissionCount}
             hasRunningProviderSubagent={hasRunningProviderSubagent}
             showInactive
           />

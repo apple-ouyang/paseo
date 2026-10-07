@@ -36,6 +36,7 @@ interface ProviderSubagentState {
     serverId: string,
     parentAgentId: string,
     subagents: ProviderSubagentDescriptorPayload[],
+    freshness?: ProviderSubagentListFreshness,
   ): void;
   applyUpdate(
     serverId: string,
@@ -69,16 +70,53 @@ export function providerSubagentLifecycleStatus(
   return "idle";
 }
 
-type ProviderSubagentListClient = Pick<DaemonClient, "listProviderSubagents">;
+interface ProviderSubagentListClient {
+  listProviderSubagents: (
+    parentAgentId: string,
+  ) => Promise<{ subagents: ProviderSubagentDescriptorPayload[] }>;
+}
 
 const pendingListRequests = new WeakMap<ProviderSubagentListClient, Map<string, Promise<void>>>();
+const loadedParents = new WeakMap<ProviderSubagentListClient, Set<string>>();
+
+let listWriteGeneration = 0;
+const liveGenerationByKey = new Map<string, number>();
+const removedGenerationByKey = new Map<string, number>();
+
+function noteLiveDescriptor(key: string): void {
+  listWriteGeneration += 1;
+  liveGenerationByKey.set(key, listWriteGeneration);
+  removedGenerationByKey.delete(key);
+}
+
+function noteRemovedDescriptor(key: string): void {
+  listWriteGeneration += 1;
+  liveGenerationByKey.delete(key);
+  removedGenerationByKey.set(key, listWriteGeneration);
+}
+
+/** Drops list-freshness stamps so one test cannot leak into the next. */
+export function resetProviderSubagentListFreshness(): void {
+  listWriteGeneration = 0;
+  liveGenerationByKey.clear();
+  removedGenerationByKey.clear();
+}
+
+export interface ProviderSubagentListFreshness {
+  /** Writes after this generation happened while the list request was in flight. */
+  snapshotGeneration: number;
+}
 
 export function refreshProviderSubagents(
   client: ProviderSubagentListClient,
   serverId: string,
   parentAgentId: string,
+  options?: { once?: boolean },
 ): Promise<void> {
   const requestKey = `${serverId}\0${parentAgentId}`;
+  if (options?.once && loadedParents.get(client)?.has(requestKey)) {
+    return Promise.resolve();
+  }
   let clientRequests = pendingListRequests.get(client);
   if (!clientRequests) {
     clientRequests = new Map();
@@ -88,10 +126,19 @@ export function refreshProviderSubagents(
   if (pending) return pending;
 
   useProviderSubagentStore.getState().trackParent(serverId, parentAgentId);
+  const snapshotGeneration = listWriteGeneration;
   const request = client
     .listProviderSubagents(parentAgentId)
     .then((payload) => {
-      useProviderSubagentStore.getState().replaceList(serverId, parentAgentId, payload.subagents);
+      useProviderSubagentStore.getState().replaceList(serverId, parentAgentId, payload.subagents, {
+        snapshotGeneration,
+      });
+      let loaded = loadedParents.get(client);
+      if (!loaded) {
+        loaded = new Set();
+        loadedParents.set(client, loaded);
+      }
+      loaded.add(requestKey);
       return undefined;
     })
     .finally(() => {
@@ -168,6 +215,95 @@ function settleTimeline(
   };
 }
 
+function keepsLiveDescriptor(
+  current: ProviderSubagentDescriptorPayload | undefined,
+  listed: ProviderSubagentDescriptorPayload,
+  liveGeneration: number,
+  snapshotGeneration: number,
+): boolean {
+  if (!current) return false;
+  if (current.updatedAt > listed.updatedAt) return true;
+  return current.updatedAt === listed.updatedAt && liveGeneration > snapshotGeneration;
+}
+
+function descriptorsAfterFreshList(
+  previous: ReadonlyMap<string, ProviderSubagentDescriptorPayload>,
+  listed: ReadonlyMap<string, ProviderSubagentDescriptorPayload>,
+  prefix: string,
+  snapshotGeneration: number,
+): Map<string, ProviderSubagentDescriptorPayload> {
+  const descriptors = new Map(previous);
+  for (const key of previous.keys()) {
+    if (!key.startsWith(prefix) || listed.has(key)) continue;
+    if ((liveGenerationByKey.get(key) ?? 0) <= snapshotGeneration) descriptors.delete(key);
+  }
+  for (const [key, subagent] of listed) {
+    if ((removedGenerationByKey.get(key) ?? 0) > snapshotGeneration) {
+      descriptors.delete(key);
+      continue;
+    }
+    const current = previous.get(key);
+    const liveGeneration = liveGenerationByKey.get(key) ?? 0;
+    if (keepsLiveDescriptor(current, subagent, liveGeneration, snapshotGeneration)) continue;
+    descriptors.set(key, subagent);
+    liveGenerationByKey.set(key, snapshotGeneration);
+    removedGenerationByKey.delete(key);
+  }
+  return descriptors;
+}
+
+function descriptorsAfterFullList(
+  previous: ReadonlyMap<string, ProviderSubagentDescriptorPayload>,
+  listed: ReadonlyMap<string, ProviderSubagentDescriptorPayload>,
+  prefix: string,
+): Map<string, ProviderSubagentDescriptorPayload> {
+  const descriptors = new Map(previous);
+  for (const key of previous.keys()) {
+    if (key.startsWith(prefix) && !listed.has(key)) {
+      descriptors.delete(key);
+      noteRemovedDescriptor(key);
+    }
+  }
+  for (const [key, subagent] of listed) {
+    descriptors.set(key, subagent);
+    noteLiveDescriptor(key);
+  }
+  return descriptors;
+}
+
+function unhideRunningChildren(
+  hiddenFromTrack: ReadonlySet<string>,
+  descriptors: ReadonlyMap<string, ProviderSubagentDescriptorPayload>,
+  prefix: string,
+): Set<string> {
+  const next = new Set(hiddenFromTrack);
+  for (const [key, subagent] of descriptors) {
+    if (key.startsWith(prefix) && subagent.status === "running") next.delete(key);
+  }
+  return next;
+}
+
+function timelinesAfterList(
+  previousTimelines: ReadonlyMap<string, ProviderSubagentTimelineState>,
+  previousDescriptors: ReadonlyMap<string, ProviderSubagentDescriptorPayload>,
+  descriptors: ReadonlyMap<string, ProviderSubagentDescriptorPayload>,
+  prefix: string,
+): Map<string, ProviderSubagentTimelineState> {
+  const retainedKeys = new Set(descriptors.keys());
+  const timelines = new Map(
+    [...previousTimelines].filter(([key]) => !key.startsWith(prefix) || retainedKeys.has(key)),
+  );
+  for (const [key, subagent] of descriptors) {
+    if (!key.startsWith(prefix)) continue;
+    const current = timelines.get(key);
+    const prior = previousDescriptors.get(key);
+    if (current && prior?.status !== subagent.status) {
+      timelines.set(key, settleTimeline(current, subagent));
+    }
+  }
+  return timelines;
+}
+
 export const useProviderSubagentStore = create<ProviderSubagentState>((set) => ({
   descriptors: new Map(),
   timelines: new Map(),
@@ -190,33 +326,23 @@ export const useProviderSubagentStore = create<ProviderSubagentState>((set) => (
       return { hiddenFromTrack };
     });
   },
-  replaceList(serverId, parentAgentId, subagents) {
+  replaceList(serverId, parentAgentId, subagents, freshness) {
     set((state) => {
       const prefix = parentPrefix(serverId, parentAgentId);
-      const descriptors = new Map(
-        [...state.descriptors].filter(([key]) => !key.startsWith(prefix)),
+      const listed = new Map(
+        subagents.map((subagent) => [
+          providerSubagentKey(serverId, parentAgentId, subagent.id),
+          subagent,
+        ]),
       );
-      const hiddenFromTrack = new Set(state.hiddenFromTrack);
-      for (const subagent of subagents) {
-        const key = providerSubagentKey(serverId, parentAgentId, subagent.id);
-        descriptors.set(key, subagent);
-        if (subagent.status === "running") {
-          hiddenFromTrack.delete(key);
-        }
-      }
-      const retainedKeys = new Set(descriptors.keys());
-      const timelines = new Map(
-        [...state.timelines].filter(([key]) => !key.startsWith(prefix) || retainedKeys.has(key)),
-      );
-      for (const subagent of subagents) {
-        const key = providerSubagentKey(serverId, parentAgentId, subagent.id);
-        const current = timelines.get(key);
-        const previous = state.descriptors.get(key);
-        if (current && previous?.status !== subagent.status) {
-          timelines.set(key, settleTimeline(current, subagent));
-        }
-      }
-      return { descriptors, timelines, hiddenFromTrack };
+      const descriptors = freshness
+        ? descriptorsAfterFreshList(state.descriptors, listed, prefix, freshness.snapshotGeneration)
+        : descriptorsAfterFullList(state.descriptors, listed, prefix);
+      return {
+        descriptors,
+        hiddenFromTrack: unhideRunningChildren(state.hiddenFromTrack, descriptors, prefix),
+        timelines: timelinesAfterList(state.timelines, state.descriptors, descriptors, prefix),
+      };
     });
   },
   applyUpdate(serverId, payload) {
@@ -227,6 +353,7 @@ export const useProviderSubagentStore = create<ProviderSubagentState>((set) => (
           payload.subagent.parentAgentId,
           payload.subagent.id,
         );
+        noteLiveDescriptor(key);
         const descriptors = new Map(state.descriptors);
         const hiddenFromTrack = new Set(state.hiddenFromTrack);
         const previous = descriptors.get(key);
@@ -244,6 +371,7 @@ export const useProviderSubagentStore = create<ProviderSubagentState>((set) => (
       }
       if (payload.kind === "remove") {
         const key = providerSubagentKey(serverId, payload.parentAgentId, payload.subagentId);
+        noteRemovedDescriptor(key);
         const descriptors = new Map(state.descriptors);
         descriptors.delete(key);
         const timelines = new Map(state.timelines);

@@ -48,9 +48,10 @@ export function useHasRunningProviderSubagent(parent: {
 
   useEffect(() => {
     if (!client || !supported) return;
-    void refreshProviderSubagents(client, parent.serverId, parent.parentAgentId).catch(
-      () => undefined,
-    );
+    // A remount (command center scroll, list recycle) must not ask again. The panel still can.
+    void refreshProviderSubagents(client, parent.serverId, parent.parentAgentId, {
+      once: true,
+    }).catch(() => undefined);
   }, [client, parent.parentAgentId, parent.serverId, supported]);
 
   return hasRunning;
@@ -64,8 +65,11 @@ export function deriveAgentBucketWithSubagentActivity(input: {
   agent: AgentStateBucketInput;
   hasRunningProviderSubagent: boolean;
 }): SidebarStateBucket {
-  if (!input.hasRunningProviderSubagent) {
-    return deriveSidebarStateBucket(input.agent);
+  const bucket = deriveSidebarStateBucket(input.agent);
+  // Check the real bucket first. Overwriting status to "running" hides an error when the
+  // caller did not also pass attentionReason, and it hides a pending permission the same way.
+  if (!input.hasRunningProviderSubagent || bucket === "failed" || bucket === "needs_input") {
+    return bucket;
   }
   return deriveSidebarStateBucket({ ...input.agent, status: "running" });
 }
