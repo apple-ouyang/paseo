@@ -5311,4 +5311,95 @@ describe("ACP stop releases a Grok process that continues after cancel", () => {
     expect(events.some((event) => event.type === "permission_requested")).toBe(false);
     expect(session.getPendingPermissions()).toEqual([]);
   });
+
+  test("grok stop ends a command the provider started before the next message", async () => {
+    const terminator = new FakeTerminator("deferred");
+    const nextPrompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+    const loadSession = vi.fn(async () => ({
+      sessionId: "session-1",
+      modes: null,
+      models: null,
+      configOptions: [],
+    }));
+    let spawned = 0;
+
+    class ResumeAfterKillSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        spawned += 1;
+        return {
+          child: createProbeChildStub(),
+          connection: {
+            prompt: nextPrompt,
+            cancel: vi.fn().mockResolvedValue(undefined),
+            loadSession,
+          } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: { loadSession: true } },
+        } as SpawnedACPProcess;
+      }
+    }
+
+    const session = new ResumeAfterKillSession(
+      { provider: "grok", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "grok",
+        logger: createTestLogger(),
+        defaultCommand: ["grok", "agent", "stdio"],
+        defaultModes: [],
+        capabilities: sessionCapabilities,
+        terminateProcess: terminator.terminate,
+      },
+    );
+    const terminalChild = createTerminalChildStub();
+    const terminalId = await startTerminal(session, terminalChild);
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.child = createProbeChildStub();
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await session.startTurn("stop this");
+    await session.interrupt();
+
+    expect(terminator.terminated).toContain(terminalChild);
+    await expect(session.terminalOutput({ sessionId: "session-1", terminalId })).rejects.toThrow(
+      `Unknown terminal '${terminalId}'`,
+    );
+
+    const next = session.startTurn("continue");
+    await flushTurns();
+    expect(spawned).toBe(0);
+
+    terminator.releaseAll();
+    await next;
+
+    expect(spawned).toBe(1);
+    expect(nextPrompt).toHaveBeenCalledOnce();
+  });
+
+  test("a provider that stays alive keeps its terminal on stop", async () => {
+    const terminator = new FakeTerminator();
+    const session = createStopSession("acp", terminator, {
+      catalogProviderId: "kimi",
+      command: ["kimi", "acp"],
+    });
+    const terminalChild = createTerminalChildStub();
+    const terminalId = await startTerminal(session, terminalChild);
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.child = createProbeChildStub();
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await session.startTurn("hello");
+    await session.interrupt();
+
+    expect(terminator.terminated).toEqual([]);
+    const output = await session.terminalOutput({ sessionId: "session-1", terminalId });
+    expect(output.exitStatus).toBeUndefined();
+    expect(internals.connection).not.toBeNull();
+  });
 });
