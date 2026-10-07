@@ -13,6 +13,11 @@ const STYLE_ID = "paseo-file-find-style";
 const SKIPPED = `script,style,iframe,textarea,select,noscript,input,mark,[${WIDGET_ATTR}]`;
 const MATCH_LIMIT = 5000;
 const REHIGHLIGHT_DELAY_MS = 150;
+// A match may span inline elements (<strong>, <code>, links) but should never
+// cross a block boundary, so text nodes are grouped by their nearest block
+// ancestor before matching. Mirrors the tags the markdown renderer emits.
+const BLOCK_RE =
+  /^(ADDRESS|ARTICLE|ASIDE|BLOCKQUOTE|DD|DIV|DL|DT|FIELDSET|FIGCAPTION|FIGURE|FOOTER|FORM|H[1-6]|HEADER|LI|MAIN|NAV|OL|P|PRE|SECTION|TABLE|TBODY|TD|TFOOT|TH|THEAD|TR|UL)$/;
 
 export interface PreviewFindSnapshot {
   open: boolean;
@@ -32,6 +37,13 @@ const CLOSED: PreviewFindSnapshot = {
   limited: false,
 };
 
+/** One text node's slice of a block's joined text. */
+interface TextBlock {
+  nodes: Text[];
+  starts: number[];
+  joined: string;
+}
+
 function ensureStyle() {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
@@ -44,8 +56,15 @@ function ensureStyle() {
   document.head.appendChild(style);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export class PreviewFindModel {
+  /** Flat mark list for teardown. */
   private marks: HTMLElement[] = [];
+  /** Marks per logical match; a match spanning inline nodes gets one mark each. */
+  private matchMarks: HTMLElement[][] = [];
   private observer: MutationObserver | null = null;
   private rehighlightTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<() => void>();
@@ -81,6 +100,8 @@ export class PreviewFindModel {
   readonly close = () => {
     if (!this.snapshot.open) return;
     this.observer?.disconnect();
+    if (this.rehighlightTimer) clearTimeout(this.rehighlightTimer);
+    this.rehighlightTimer = null;
     this.clearMarks();
     this.snapshot = { ...this.snapshot, open: false, current: 0, total: 0, limited: false };
     this.publish();
@@ -105,7 +126,7 @@ export class PreviewFindModel {
   };
 
   private step(direction: 1 | -1) {
-    const total = this.marks.length;
+    const total = this.matchMarks.length;
     if (!total) return;
     let index: number;
     if (this.snapshot.current === 0) {
@@ -117,11 +138,13 @@ export class PreviewFindModel {
   }
 
   private select(index: number) {
-    this.marks[this.snapshot.current - 1]?.classList.remove(CURRENT_HIT);
-    const mark = this.marks[index];
-    if (!mark) return;
-    mark.classList.add(CURRENT_HIT);
-    mark.scrollIntoView?.({ block: "nearest" });
+    for (const mark of this.matchMarks[this.snapshot.current - 1] ?? []) {
+      mark.classList.remove(CURRENT_HIT);
+    }
+    const group = this.matchMarks[index];
+    if (!group?.length) return;
+    for (const mark of group) mark.classList.add(CURRENT_HIT);
+    group[0].scrollIntoView?.({ block: "nearest" });
     this.snapshot = { ...this.snapshot, current: index + 1 };
     this.publish();
   }
@@ -143,7 +166,7 @@ export class PreviewFindModel {
     const delay = this.options.rehighlightDelayMs ?? REHIGHLIGHT_DELAY_MS;
     this.rehighlightTimer = setTimeout(() => {
       this.rehighlightTimer = null;
-      this.rehighlight();
+      if (this.snapshot.open) this.rehighlight();
     }, delay);
   }
 
@@ -166,51 +189,86 @@ export class PreviewFindModel {
       }
       let limited = false;
       const limit = this.options.matchLimit ?? MATCH_LIMIT;
-      const needle = query.toLowerCase();
-      for (const node of this.textNodes()) {
-        if (this.marks.length >= limit) {
+      // Match on the original text with an `i` flag so reported offsets stay in
+      // the original string — `toLowerCase` can change length (e.g. "İ").
+      const needle = new RegExp(escapeRegExp(query), "giu");
+      for (const block of this.textBlocks()) {
+        if (this.matchMarks.length >= limit) {
           limited = true;
           break;
         }
-        limited = this.markNode(node, needle, query.length, limit) || limited;
+        limited = this.markBlock(block, needle, limit) || limited;
       }
       this.snapshot = {
         ...this.snapshot,
-        current: this.marks.length ? 1 : 0,
-        total: this.marks.length,
+        current: this.matchMarks.length ? 1 : 0,
+        total: this.matchMarks.length,
         limited,
       };
       this.publish();
-      if (this.marks.length) {
-        this.marks[0].classList.add(CURRENT_HIT);
-        this.marks[0].scrollIntoView?.({ block: "nearest" });
+      const first = this.matchMarks[0];
+      if (first?.length) {
+        for (const mark of first) mark.classList.add(CURRENT_HIT);
+        first[0].scrollIntoView?.({ block: "nearest" });
       }
     } finally {
       if (this.snapshot.open) this.observe();
     }
   }
 
-  /** Returns true when the limit stopped this node partway. */
-  private markNode(node: Text, needle: string, needleLength: number, limit: number): boolean {
-    const data = node.data;
-    const haystack = data.toLowerCase();
-    let hit = haystack.indexOf(needle);
-    if (hit < 0) return false;
-    const fragment = document.createDocumentFragment();
-    let last = 0;
-    while (hit >= 0 && this.marks.length < limit) {
-      fragment.appendChild(document.createTextNode(data.slice(last, hit)));
-      const mark = document.createElement("mark");
-      mark.className = HIT;
-      mark.textContent = data.slice(hit, hit + needleLength);
-      fragment.appendChild(mark);
-      this.marks.push(mark);
-      last = hit + needleLength;
-      hit = haystack.indexOf(needle, last);
+  /**
+   * Wraps every regex hit in the block's joined text. A hit can span several
+   * inline nodes (`**bold** tail`), so each overlapped node slice gets its own
+   * mark and all slices join one logical match group. Returns true when the
+   * match limit stopped the scan partway.
+   */
+  private markBlock(block: TextBlock, needle: RegExp, limit: number): boolean {
+    const hits: { start: number; end: number; match: number }[] = [];
+    let limited = false;
+    needle.lastIndex = 0;
+    let found: RegExpExecArray | null;
+    while ((found = needle.exec(block.joined))) {
+      if (!found[0].length) {
+        needle.lastIndex += 1;
+        continue;
+      }
+      const index = this.matchMarks.length;
+      if (index >= limit) {
+        limited = true;
+        break;
+      }
+      this.matchMarks.push([]);
+      hits.push({ start: found.index, end: found.index + found[0].length, match: index });
     }
-    fragment.appendChild(document.createTextNode(data.slice(last)));
-    node.parentNode?.replaceChild(fragment, node);
-    return hit >= 0;
+    for (let i = 0; i < block.nodes.length; i++) {
+      const node = block.nodes[i];
+      const nodeStart = block.starts[i];
+      const nodeEnd = nodeStart + node.data.length;
+      const ranges = hits
+        .filter((hit) => hit.start < nodeEnd && hit.end > nodeStart)
+        .map((hit) => ({
+          start: Math.max(hit.start, nodeStart) - nodeStart,
+          end: Math.min(hit.end, nodeEnd) - nodeStart,
+          match: hit.match,
+        }));
+      if (!ranges.length) continue;
+      const data = node.data;
+      const fragment = document.createDocumentFragment();
+      let last = 0;
+      for (const range of ranges) {
+        fragment.appendChild(document.createTextNode(data.slice(last, range.start)));
+        const mark = document.createElement("mark");
+        mark.className = HIT;
+        mark.textContent = data.slice(range.start, range.end);
+        fragment.appendChild(mark);
+        this.matchMarks[range.match].push(mark);
+        this.marks.push(mark);
+        last = range.end;
+      }
+      fragment.appendChild(document.createTextNode(data.slice(last)));
+      node.parentNode?.replaceChild(fragment, node);
+    }
+    return limited;
   }
 
   private clearMarks() {
@@ -223,9 +281,22 @@ export class PreviewFindModel {
     }
     for (const parent of parents) parent.normalize();
     this.marks = [];
+    this.matchMarks = [];
   }
 
-  private textNodes(): Text[] {
+  /** Nearest block-level ancestor inside the host; the parent for inline text. */
+  private blockOf(node: Text): Element {
+    let element = node.parentElement;
+    const fallback = element ?? this.host;
+    while (element && element !== this.host) {
+      if (BLOCK_RE.test(element.tagName)) return element;
+      element = element.parentElement;
+    }
+    return fallback;
+  }
+
+  /** Text nodes grouped per block so a match may cross inline element edges. */
+  private textBlocks(): TextBlock[] {
     const walker = document.createTreeWalker(this.host, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) => {
         const parent = node.parentElement;
@@ -234,9 +305,27 @@ export class PreviewFindModel {
         return NodeFilter.FILTER_ACCEPT;
       },
     });
-    const nodes: Text[] = [];
+    const grouped = new Map<Element, Text[]>();
     let current: Node | null;
-    while ((current = walker.nextNode())) nodes.push(current as Text);
-    return nodes;
+    while ((current = walker.nextNode())) {
+      const node = current as Text;
+      const block = this.blockOf(node);
+      const list = grouped.get(block);
+      if (list) list.push(node);
+      else grouped.set(block, [node]);
+    }
+    const blocks: TextBlock[] = [];
+    for (const nodes of grouped.values()) {
+      const starts: number[] = [];
+      let offset = 0;
+      let joined = "";
+      for (const node of nodes) {
+        starts.push(offset);
+        joined += node.data;
+        offset += node.data.length;
+      }
+      blocks.push({ nodes, starts, joined });
+    }
+    return blocks;
   }
 }
