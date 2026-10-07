@@ -99,7 +99,7 @@ describe("edit undo and redo", () => {
     const focused = new FakeEditTarget(false);
     const windowContents = new FakeEditTarget(false);
 
-    runEditCommand("undo", focused, windowContents);
+    runEditCommand({ method: "undo", focused, windowContents });
 
     expect(focused.calls).toEqual(["undo"]);
     expect(windowContents.calls).toEqual([]);
@@ -109,7 +109,7 @@ describe("edit undo and redo", () => {
     const focused = new FakeEditTarget(true);
     const windowContents = new FakeEditTarget(false);
 
-    runEditCommand("redo", focused, windowContents);
+    runEditCommand({ method: "redo", focused, windowContents });
 
     expect(focused.calls).toEqual([]);
     expect(windowContents.calls).toEqual(["redo"]);
@@ -119,8 +119,8 @@ describe("edit undo and redo", () => {
     const focused = new FakeEditTarget(true);
     const windowContents = new FakeEditTarget(true);
 
-    runEditCommand("undo", null, windowContents);
-    runEditCommand("undo", focused, null);
+    runEditCommand({ method: "undo", focused: null, windowContents });
+    runEditCommand({ method: "undo", focused, windowContents: null });
 
     expect(focused.calls).toEqual([]);
     expect(windowContents.calls).toEqual([]);

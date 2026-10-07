@@ -73,11 +73,13 @@ export interface EditCommandTarget {
 // macOS role "undo" / "redo" installs a native undo: selector and never calls
 // webContents.undo() (Electron canExecuteRole). In this hidden-titlebar window
 // that selector does not reach the page, so Cmd+Z does nothing in the composer.
-export function runEditCommand(
-  method: "undo" | "redo",
-  focused: EditCommandTarget | null | undefined,
-  windowContents: EditCommandTarget | null | undefined,
-): void {
+interface RunEditCommandInput {
+  method: "undo" | "redo";
+  focused: EditCommandTarget | null | undefined;
+  windowContents: EditCommandTarget | null | undefined;
+}
+
+export function runEditCommand({ method, focused, windowContents }: RunEditCommandInput): void {
   if (focused && !focused.isDestroyed()) {
     focused[method]();
     return;
@@ -102,7 +104,11 @@ export function editUndoRedoMenuItems(
 
 function bindEditCommand(method: "undo" | "redo") {
   return withBrowserWindow((win) => {
-    runEditCommand(method, webContents.getFocusedWebContents(), win.webContents);
+    runEditCommand({
+      method,
+      focused: webContents.getFocusedWebContents(),
+      windowContents: win.webContents,
+    });
   });
 }
 
