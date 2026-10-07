@@ -942,6 +942,106 @@ test("a failed history read does not clobber a preview a newer replay wrote", as
   }
 });
 
+test("a failed history read does not restore deleted turns while a newer read is still open", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-preview-fail-during-read-"));
+  let script: "seed" | "fail" | "replace" = "seed";
+  let releaseFailure: (() => void) | null = null;
+  let releaseReplacement: (() => void) | null = null;
+  let announceFailureReady: (() => void) | null = null;
+  let announceReplacementHeld: (() => void) | null = null;
+  const failureReady = new Promise<void>((resolve) => {
+    announceFailureReady = resolve;
+  });
+  const replacementHeld = new Promise<void>((resolve) => {
+    announceReplacementHeld = resolve;
+  });
+  class HistorySession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      if (script === "seed") {
+        yield {
+          type: "timeline",
+          provider: "codex",
+          item: { type: "user_message", text: "keep the kumquat plan" },
+        };
+        return;
+      }
+      if (script === "fail") {
+        announceFailureReady?.();
+        await new Promise<void>((resolve) => {
+          releaseFailure = resolve;
+        });
+        throw new Error("provider history read failed");
+      }
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "user_message", text: "fresh start" },
+      };
+      announceReplacementHeld?.();
+      await new Promise<void>((resolve) => {
+        releaseReplacement = resolve;
+      });
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "kept" },
+      };
+    }
+  }
+  class HistoryClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new HistorySession(config);
+    }
+
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return new HistorySession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  }
+  const manager = new AgentManager({ clients: { codex: new HistoryClient() }, logger });
+  let agentId: string | null = null;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true });
+    expect(
+      (manager.listMessagePreviews().get(agent.id) ?? []).map((message) => message.text),
+    ).toEqual(["keep the kumquat plan"]);
+
+    script = "fail";
+    const failingRewrite = manager.hydrateTimelineFromProvider(agent.id, { force: true });
+    await failureReady;
+    script = "replace";
+    const replacement = manager.hydrateTimelineFromProvider(agent.id, { force: true });
+    await replacementHeld;
+    const resumeFailure = releaseFailure as (() => void) | null;
+    const resumeReplacement = releaseReplacement as (() => void) | null;
+    expect(resumeFailure).not.toBeNull();
+    expect(resumeReplacement).not.toBeNull();
+
+    resumeFailure?.();
+    await expect(failingRewrite).rejects.toThrow("provider history read failed");
+    expect(
+      (manager.listMessagePreviews().get(agent.id) ?? []).some((message) =>
+        message.text.includes("kumquat"),
+      ),
+    ).toBe(false);
+
+    resumeReplacement?.();
+    await replacement;
+    expect(
+      (manager.listMessagePreviews().get(agent.id) ?? []).map((message) => message.text),
+    ).toEqual(["fresh start", "kept"]);
+  } finally {
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("a live agent with nothing to preview still reports an empty preview", async () => {
   // The history search merges these over the stored records, so an emptied
   // preview has to be present to mask the copy a rewind has not overwritten yet.

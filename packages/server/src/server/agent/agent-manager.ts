@@ -750,6 +750,7 @@ export class AgentManager {
   private paseoToolsEnabled = true;
   private paseoToolCatalogFactory: PaseoToolCatalogFactory | null = null;
   private readonly paseoToolPolicies = new Map<string, ProviderPaseoToolsPolicy | undefined>();
+  private readonly historyHydrateGeneration = new Map<string, number>();
   private readonly resolvePaseoToolPolicy: (
     provider: AgentProvider,
   ) => ProviderPaseoToolsPolicy | undefined;
@@ -3742,6 +3743,7 @@ export class AgentManager {
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
     this.agents.delete(agent.id);
     this.previousStatuses.delete(agent.id);
+    this.historyHydrateGeneration.delete(agent.id);
     if (agent.unsubscribeSession) {
       agent.unsubscribeSession();
       agent.unsubscribeSession = null;
@@ -4055,11 +4057,12 @@ export class AgentManager {
     broadcast: boolean,
     broadcastTimeline: boolean,
   ): Promise<void> {
-    // Hidden while the provider history is read: the timeline is about to be
-    // replaced, and a search during that async read must not find a turn a rewind
-    // just deleted. A successful read is refilled by the replay through
-    // `recordTimeline`; a failed one is rebuilt from whatever timeline is in place
-    // by then, because an overlapping replacement may have swapped it meanwhile.
+    // Hidden while this read is the newest one. A failed read puts the preview
+    // back only when no newer read has started. A newer read owns the preview, so
+    // an older failure must not restore turns that read is about to replace, and
+    // the newer replay must not append onto that restored copy.
+    const generation = (this.historyHydrateGeneration.get(agent.id) ?? 0) + 1;
+    this.historyHydrateGeneration.set(agent.id, generation);
     const hiddenPreview: AgentMessagePreview[] = [];
     agent.previewMessages = hiddenPreview;
     const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
@@ -4079,17 +4082,27 @@ export class AgentManager {
         }
       }
     } catch (error) {
-      agent.previewMessages = this.timelineStore.has(agent.id)
-        ? buildMessagePreview(this.timelineStore.getItems(agent.id))
-        : [];
+      if (this.historyHydrateGeneration.get(agent.id) === generation) {
+        agent.previewMessages = this.timelineStore.has(agent.id)
+          ? buildMessagePreview(this.timelineStore.getItems(agent.id))
+          : [];
+      }
       throw error;
+    }
+
+    if (this.historyHydrateGeneration.get(agent.id) !== generation) {
+      return;
     }
 
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
     await this.deleteCommittedTimeline(agent.id);
+    if (this.historyHydrateGeneration.get(agent.id) !== generation) {
+      return;
+    }
     this.timelineStore.delete(agent.id);
     this.timelineStore.initialize(agent.id, { timestamp: new Date().toISOString() });
     agent.historyPrimed = true;
+    agent.previewMessages = hiddenPreview;
 
     for (const event of this.providerSubagents.deleteParent(agent.id)) {
       if (broadcast) {
