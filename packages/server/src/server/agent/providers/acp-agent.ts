@@ -1764,6 +1764,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private historyPending = false;
   private stopReleased = false;
   private stopTermination: Promise<TerminateWithTreeKillResult | "none"> = Promise.resolve("none");
+  private stopGate: Promise<void> = Promise.resolve();
+  private releaseStopGate: (() => void) | null = null;
+  private resumeAfterStopInFlight: Promise<void> | null = null;
   private readonly catalogProviderId?: string;
   private replayingHistory = false;
   private bootstrapThreadEventPending = false;
@@ -1928,16 +1931,16 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (this.closed) {
       throw new Error(`${this.provider} session is closed`);
     }
+    // Stop can still be awaiting session/cancel while the old prompt already settled.
+    // The connection is still set then, so a new turn has to wait before it sends.
+    if (this.stopReleased || this.releaseStopGate) {
+      await this.waitForStopToSettle();
+    }
+    if (this.closed) {
+      throw new Error(`${this.provider} session is closed`);
+    }
     if (!this.connection || !this.sessionId) {
-      if (this.stopReleased && !this.closed) {
-        await this.resumeAfterStop();
-      }
-      if (this.closed) {
-        throw new Error(`${this.provider} session is closed`);
-      }
-      if (!this.connection || !this.sessionId) {
-        throw new Error(`${this.provider} session is not initialized`);
-      }
+      throw new Error(`${this.provider} session is not initialized`);
     }
     if (this.activeForegroundTurnId) {
       throw new Error("A foreground turn is already active");
@@ -2524,48 +2527,85 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
 
     const turnId = this.activeForegroundTurnId;
-    if (this.stopKillsProcess()) {
+    const kills = this.stopKillsProcess();
+    if (kills) {
       // Late permission and session events must not surface while this process is dying.
       this.stopReleased = true;
+      this.holdStopGate();
     }
-    this.cancelPendingPermissions();
+    try {
+      this.cancelPendingPermissions();
 
-    if (turnId && this.stopKillsProcess()) {
-      const cancel = this.connection.cancel({ sessionId: this.sessionId }).catch(() => undefined);
-      try {
-        await withTimeout(cancel, ACP_CANCEL_REQUEST_TIMEOUT_MS, "ACP session/cancel timed out");
-      } catch {
-        // Stop still kills a provider that does not answer cancel.
+      if (turnId && kills) {
+        const cancel = this.connection.cancel({ sessionId: this.sessionId }).catch(() => undefined);
+        try {
+          await withTimeout(cancel, ACP_CANCEL_REQUEST_TIMEOUT_MS, "ACP session/cancel timed out");
+        } catch {
+          // Stop still kills a provider that does not answer cancel.
+        }
+      } else if (turnId) {
+        await this.connection.cancel({ sessionId: this.sessionId });
       }
-    } else if (turnId) {
-      await this.connection.cancel({ sessionId: this.sessionId });
-    }
-    if (!this.stopKillsProcess()) {
-      return;
-    }
+      if (!kills) {
+        return;
+      }
 
-    const child = this.child;
-    this.connection = null;
-    this.child = null;
-    if (turnId && this.activeForegroundTurnId === turnId) {
-      this.synthesizeCanceledToolCalls();
-      this.finishTurn({
-        type: "turn_canceled",
-        provider: this.provider,
-        reason: "Interrupted",
-        turnId,
+      const child = this.child;
+      this.connection = null;
+      this.child = null;
+      if (child) {
+        // interrupt has to return inside the manager's 2s window. The next message waits.
+        this.stopTermination = this.terminateProcess(child, {
+          gracefulTimeoutMs: 200,
+          forceTimeoutMs: 500,
+        }).catch((error: unknown) => {
+          this.logger.warn({ err: error }, "ACP stop failed to terminate the provider process");
+          return "kill-timeout";
+        });
+      }
+      if (turnId && this.activeForegroundTurnId === turnId) {
+        this.synthesizeCanceledToolCalls();
+        this.finishTurn({
+          type: "turn_canceled",
+          provider: this.provider,
+          reason: "Interrupted",
+          turnId,
+        });
+      }
+    } finally {
+      if (kills) this.openStopGate();
+    }
+  }
+
+  private holdStopGate(): void {
+    if (this.releaseStopGate) return;
+    this.stopGate = new Promise<void>((resolve) => {
+      this.releaseStopGate = resolve;
+    });
+  }
+
+  private openStopGate(): void {
+    const release = this.releaseStopGate;
+    this.releaseStopGate = null;
+    release?.();
+  }
+
+  private async waitForStopToSettle(): Promise<void> {
+    await this.stopGate;
+    if (this.closed || !this.stopReleased) return;
+    if (!this.resumeAfterStopInFlight) {
+      this.resumeAfterStopInFlight = this.resumeAfterStop().finally(() => {
+        this.resumeAfterStopInFlight = null;
       });
     }
-    if (child) {
-      // interrupt has to return inside the manager's 2s window. The next message waits.
-      this.stopTermination = this.terminateProcess(child, {
-        gracefulTimeoutMs: 200,
-        forceTimeoutMs: 500,
-      }).catch((error: unknown) => {
-        this.logger.warn({ err: error }, "ACP stop failed to terminate the provider process");
-        return "kill-timeout";
-      });
-    }
+    await this.resumeAfterStopInFlight;
+  }
+
+  // initializeResumedSession reapplies config.modeId and config.model. Those fields
+  // still hold the launch values unless the live choice is copied first.
+  private keepLiveSelections(): void {
+    if (this.currentMode) this.config.modeId = this.currentMode;
+    if (this.currentModel) this.config.model = this.currentModel;
   }
 
   private async resumeAfterStop(): Promise<void> {
@@ -2576,6 +2616,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (termination === "kill-timeout") {
       throw new Error("ACP stop did not exit the provider process");
     }
+    this.keepLiveSelections();
     if (!this.initialHandle && this.sessionId) {
       this.initialHandle = {
         provider: this.provider,
