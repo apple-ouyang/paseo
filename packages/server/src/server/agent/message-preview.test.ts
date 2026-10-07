@@ -58,6 +58,39 @@ describe("appendMessagePreview", () => {
     expect(joined).toEqual([{ role: "assistant", text: "the answer" }]);
   });
 
+  it("joins chunks that share a message id", () => {
+    const first = {
+      type: "assistant_message" as const,
+      text: "the ",
+      messageId: "msg-1",
+    };
+    const preview = append([], first);
+    const joined = append(
+      preview,
+      { type: "assistant_message", text: "answer", messageId: "msg-1" },
+      first,
+    );
+    expect(joined).toEqual([{ role: "assistant", text: "the answer" }]);
+  });
+
+  it("keeps a later reply when an earlier one already filled the cap", () => {
+    const first = {
+      type: "assistant_message" as const,
+      text: "a".repeat(MESSAGE_PREVIEW_TEXT_LIMIT),
+      messageId: "msg-1",
+    };
+    const preview = append([], first);
+    const separated = append(
+      preview,
+      { type: "assistant_message", text: "find the kumquat", messageId: "msg-2" },
+      first,
+    );
+    expect(separated).toEqual([
+      { role: "assistant", text: "a".repeat(MESSAGE_PREVIEW_TEXT_LIMIT) },
+      { role: "assistant", text: "find the kumquat" },
+    ]);
+  });
+
   it("starts a new reply when a reasoning step came between chunks", () => {
     const preview = append([], assistantChunk, reasoning);
     const separated = append(

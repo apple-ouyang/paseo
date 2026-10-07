@@ -65,10 +65,13 @@ export function appendMessagePreview(
 ): AgentMessagePreview[] {
   const role = item.type === "user_message" ? "user" : "assistant";
   const last = preview.at(-1);
+  // Same boundary as TimelineProjection.mergeAssistantChunks: a new messageId
+  // is a new reply. Joining it would fill the 500-character cap and hide it.
   const continuesReply =
     role === "assistant" &&
     previousItem?.type === "assistant_message" &&
-    last?.role === "assistant";
+    last?.role === "assistant" &&
+    (item.messageId === undefined || previousItem.messageId === item.messageId);
   const next: AgentMessagePreview =
     role === "assistant"
       ? {
