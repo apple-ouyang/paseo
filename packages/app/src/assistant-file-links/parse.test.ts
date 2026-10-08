@@ -417,6 +417,73 @@ describe("parseAssistantFileLink", () => {
     }
     expect(() => parseFileProtocolUrl("file:///tmp/100% packet loss")).not.toThrow();
   });
+
+  it("decodes percent-encoded relative markdown hrefs", () => {
+    // markdown-it percent-encodes non-ASCII characters in hrefs, so a link
+    // written as [x](docs/reports/开户赠金.md) arrives here percent-encoded.
+    expect(
+      parseAssistantFileLink("docs/reports/%E5%BC%80%E6%88%B7%E8%B5%A0%E9%87%91.md", {
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
+      raw: "docs/reports/%E5%BC%80%E6%88%B7%E8%B5%A0%E9%87%91.md",
+      path: "/Users/test/project/docs/reports/开户赠金.md",
+      lineStart: undefined,
+      lineEnd: undefined,
+    });
+  });
+
+  it("decodes percent-encoded spaces in relative markdown hrefs", () => {
+    expect(
+      parseAssistantFileLink("docs/my%20file.md#L5", {
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
+      raw: "docs/my%20file.md#L5",
+      path: "/Users/test/project/docs/my file.md",
+      lineStart: 5,
+      lineEnd: undefined,
+    });
+  });
+
+  it("decodes percent-encoded absolute hrefs with line suffixes", () => {
+    expect(
+      parseAssistantFileLink("/tmp/%E5%BC%80%E6%88%B7.md:3", {
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
+      raw: "/tmp/%E5%BC%80%E6%88%B7.md:3",
+      path: "/tmp/开户.md",
+      lineStart: 3,
+      lineEnd: undefined,
+    });
+  });
+
+  it("decodes percent-encoded home-relative hrefs", () => {
+    expect(
+      parseAssistantFileLink("~/notes/%E5%BC%80%E6%88%B7.md", {
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
+      raw: "~/notes/%E5%BC%80%E6%88%B7.md",
+      path: "~/notes/开户.md",
+      lineStart: undefined,
+      lineEnd: undefined,
+    });
+  });
+
+  it("decodes percent-encoded Windows hrefs", () => {
+    expect(
+      parseAssistantFileLink("C:/repo/my%20dir/app.tsx#L8", {
+        workspaceRoot: "C:/repo",
+      }),
+    ).toEqual({
+      raw: "C:/repo/my%20dir/app.tsx#L8",
+      path: "C:/repo/my dir/app.tsx",
+      lineStart: 8,
+      lineEnd: undefined,
+    });
+  });
 });
 
 describe("normalizeInlinePathTarget", () => {

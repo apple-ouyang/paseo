@@ -240,7 +240,7 @@ function parseAssistantInlinePathLink(value: string): InlinePathTarget | null {
     return null;
   }
 
-  const normalizedPath = normalizePathToken(inlinePathTarget.path);
+  const normalizedPath = normalizePathToken(safeDecodeURIComponent(inlinePathTarget.path));
   if (!normalizedPath || !isAbsolutePath(normalizedPath)) {
     return null;
   }
@@ -315,7 +315,7 @@ export function parseAssistantFileLink(
 
   const windowsPathMatch = trimmed.match(/^([A-Za-z]:[\\/][^?#]*)(#[^?]+)?$/);
   if (windowsPathMatch) {
-    const normalizedPath = normalizePathToken(windowsPathMatch[1] ?? "");
+    const normalizedPath = normalizePathToken(safeDecodeURIComponent(windowsPathMatch[1] ?? ""));
     if (!normalizedPath) {
       return null;
     }
@@ -436,7 +436,11 @@ function parseLocalPathParts(
     return null;
   }
 
-  const inlinePathTarget = parseInlinePathToken(beforeHash);
+  // Markdown renderers percent-encode non-ASCII and space characters in hrefs
+  // (markdown-it via mdurl), so decode before applying path heuristics.
+  const decodedBeforeHash = safeDecodeURIComponent(beforeHash);
+
+  const inlinePathTarget = parseInlinePathToken(decodedBeforeHash);
   if (inlinePathTarget) {
     if (!isPlausibleAssistantLocalPath(inlinePathTarget.path)) {
       return null;
@@ -451,16 +455,16 @@ function parseLocalPathParts(
     };
   }
 
-  if (!beforeHash || beforeHash.includes(":")) {
+  if (!decodedBeforeHash || decodedBeforeHash.includes(":")) {
     return null;
   }
 
-  if (!isPlausibleAssistantLocalPath(beforeHash)) {
+  if (!isPlausibleAssistantLocalPath(decodedBeforeHash)) {
     return null;
   }
 
   return {
-    path: beforeHash,
+    path: decodedBeforeHash,
     lines: fragmentLines,
   };
 }
