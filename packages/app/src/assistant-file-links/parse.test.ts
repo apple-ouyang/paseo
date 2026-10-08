@@ -424,6 +424,7 @@ describe("parseAssistantFileLink", () => {
     expect(
       parseAssistantFileLink("docs/reports/%E5%BC%80%E6%88%B7%E8%B5%A0%E9%87%91.md", {
         workspaceRoot: "/Users/test/project",
+        decodeHref: true,
       }),
     ).toEqual({
       raw: "docs/reports/%E5%BC%80%E6%88%B7%E8%B5%A0%E9%87%91.md",
@@ -437,6 +438,7 @@ describe("parseAssistantFileLink", () => {
     expect(
       parseAssistantFileLink("docs/my%20file.md#L5", {
         workspaceRoot: "/Users/test/project",
+        decodeHref: true,
       }),
     ).toEqual({
       raw: "docs/my%20file.md#L5",
@@ -450,6 +452,7 @@ describe("parseAssistantFileLink", () => {
     expect(
       parseAssistantFileLink("/tmp/%E5%BC%80%E6%88%B7.md:3", {
         workspaceRoot: "/Users/test/project",
+        decodeHref: true,
       }),
     ).toEqual({
       raw: "/tmp/%E5%BC%80%E6%88%B7.md:3",
@@ -463,6 +466,7 @@ describe("parseAssistantFileLink", () => {
     expect(
       parseAssistantFileLink("~/notes/%E5%BC%80%E6%88%B7.md", {
         workspaceRoot: "/Users/test/project",
+        decodeHref: true,
       }),
     ).toEqual({
       raw: "~/notes/%E5%BC%80%E6%88%B7.md",
@@ -476,11 +480,37 @@ describe("parseAssistantFileLink", () => {
     expect(
       parseAssistantFileLink("C:/repo/my%20dir/app.tsx#L8", {
         workspaceRoot: "C:/repo",
+        decodeHref: true,
       }),
     ).toEqual({
       raw: "C:/repo/my%20dir/app.tsx#L8",
       path: "C:/repo/my dir/app.tsx",
       lineStart: 8,
+      lineEnd: undefined,
+    });
+  });
+
+  it("keeps literal percent signs in raw paths that are not hrefs", () => {
+    // Inline-code and linkified tokens are raw file paths: a real file named
+    // "my%20file.md" must not be decoded into "my file.md".
+    expect(
+      parseAssistantFileLink("docs/my%20file.md", {
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
+      raw: "docs/my%20file.md",
+      path: "/Users/test/project/docs/my%20file.md",
+      lineStart: undefined,
+      lineEnd: undefined,
+    });
+    expect(
+      parseAssistantFileLink("/tmp/my%20file.md:3", {
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
+      raw: "/tmp/my%20file.md:3",
+      path: "/tmp/my%20file.md",
+      lineStart: 3,
       lineEnd: undefined,
     });
   });

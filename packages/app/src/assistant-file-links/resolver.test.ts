@@ -165,6 +165,46 @@ describe("classifyForResolution", () => {
 
     expect(result).toEqual({ kind: "resolved", value: { kind: "ignored" } });
   });
+
+  it("decodes percent-encoded markdown hrefs", () => {
+    const result = classifyForResolution({ href: "docs/my%20file.md" }, CONTEXT);
+
+    expect(result).toEqual({
+      kind: "resolved",
+      value: {
+        kind: "file",
+        target: {
+          raw: "docs/my%20file.md",
+          path: "/Users/test/project/docs/my file.md",
+          lineStart: undefined,
+          lineEnd: undefined,
+        },
+      },
+    });
+  });
+
+  it("keeps literal percent signs in inline-code paths", () => {
+    const result = classifyForResolution(
+      {
+        href: "docs/my%20file.md",
+        text: "docs/my%20file.md",
+        sourceType: "inline-code",
+      },
+      CONTEXT,
+    );
+
+    expect(result).toEqual({
+      kind: "needsLookup",
+      ambiguousQuery: "docs/my%20file.md",
+      token: "docs/my%20file.md",
+      target: {
+        raw: "docs/my%20file.md",
+        path: "/Users/test/project/docs/my%20file.md",
+        lineStart: undefined,
+        lineEnd: undefined,
+      },
+    });
+  });
 });
 
 describe("fetchDaemonResolution", () => {
