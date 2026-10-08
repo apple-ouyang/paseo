@@ -514,6 +514,31 @@ describe("parseAssistantFileLink", () => {
       lineEnd: undefined,
     });
   });
+
+  it("keeps non-ASCII characters in raw absolute paths", () => {
+    // `new URL` percent-encodes non-ASCII, so raw paths must not be routed
+    // through URL parsing — `/tmp/开户.md` must round-trip unchanged.
+    expect(
+      parseAssistantFileLink("/tmp/开户.md", {
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
+      raw: "/tmp/开户.md",
+      path: "/tmp/开户.md",
+      lineStart: undefined,
+      lineEnd: undefined,
+    });
+    expect(
+      parseAssistantFileLink("/tmp/开户.md#L4", {
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
+      raw: "/tmp/开户.md#L4",
+      path: "/tmp/开户.md",
+      lineStart: 4,
+      lineEnd: undefined,
+    });
+  });
 });
 
 describe("normalizeInlinePathTarget", () => {

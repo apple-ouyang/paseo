@@ -342,21 +342,33 @@ export function parseAssistantFileLink(
     return null;
   }
 
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(trimmed, "http://paseo.invalid");
-  } catch {
-    return null;
+  // Hrefs go through URL parsing so `%`-escapes and `.`/`..` segments
+  // normalize before decode. Raw paths must not: `new URL` percent-encodes
+  // non-ASCII characters, which would corrupt `/tmp/开户.md` into the
+  // still-encoded name.
+  let pathPart: string;
+  let hashPart: string;
+  if (options.decodeHref) {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(trimmed, "http://paseo.invalid");
+    } catch {
+      return null;
+    }
+    pathPart = safeDecodeURIComponent(parsedUrl.pathname);
+    hashPart = parsedUrl.hash;
+  } else {
+    const hashIndex = trimmed.indexOf("#");
+    pathPart = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed;
+    hashPart = hashIndex >= 0 ? trimmed.slice(hashIndex) : "";
   }
 
-  const normalizedPath = normalizePathToken(
-    options.decodeHref ? safeDecodeURIComponent(parsedUrl.pathname) : parsedUrl.pathname,
-  );
+  const normalizedPath = normalizePathToken(pathPart);
   if (!normalizedPath || !isAbsolutePath(normalizedPath)) {
     return null;
   }
 
-  const lines = parseLineFragment(parsedUrl.hash);
+  const lines = parseLineFragment(hashPart);
   if (!lines) {
     return null;
   }
