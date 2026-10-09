@@ -697,9 +697,13 @@ describe("terminal emulator runtime in a real browser", () => {
     mounted.root.style.display = "none";
     mounted.runtime.resize({ forceRefresh: true });
     mounted.root.style.display = "";
-    mounted.runtime.resize({ forceRefresh: true });
+    const sizesBefore = mounted.sizes.length;
+    mounted.runtime.resize({});
 
     expect(clearTextureAtlas).toHaveBeenCalled();
+    // The reveal fit must emit even though the measured size is unchanged —
+    // the daemon-side PTY may have drifted while the pane was hidden.
+    expect(mounted.sizes.length).toBeGreaterThan(sizesBefore);
   });
 
   it("does not repair the renderer on ordinary resizes", async () => {

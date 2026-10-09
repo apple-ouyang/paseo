@@ -727,7 +727,13 @@ export class TerminalEmulatorRuntime {
       const nextRows = currentTerminal.rows;
       const nextCols = currentTerminal.cols;
       const previous = this.lastSize;
+      // A pane coming back from display:none must always emit, even when its
+      // grid size is unchanged: while it was hidden the daemon-side PTY size
+      // may have drifted (another claimant, snapshot restore, reconnect), and
+      // the TUI painted at that width — without the emit it stays desynced
+      // until the next manual resize.
       if (
+        !wasContainerHidden &&
         !forceRefresh &&
         !forceClaim &&
         previous &&
