@@ -112,6 +112,58 @@ export function createTerminalResizeEvent(input: {
   };
 }
 
+// xterm keeps the active renderer behind untyped internals; the visibility
+// repair only needs this slice (see repairTerminalAfterVisibilityRestore).
+interface TerminalRendererInternals {
+  _core?: {
+    _renderService?: {
+      _renderer?: {
+        value?: {
+          _canvas?: HTMLCanvasElement;
+          _gl?: { canvas?: HTMLCanvasElement };
+          _devicePixelRatio?: number;
+          dimensions?: {
+            device?: { canvas?: { width?: number; height?: number } };
+          };
+          handleDevicePixelRatioChange?: () => void;
+          handleResize?: (cols: number, rows: number) => void;
+        };
+      };
+    };
+  };
+}
+
+type ActiveTerminalRenderer = NonNullable<
+  NonNullable<
+    NonNullable<NonNullable<TerminalRendererInternals["_core"]>["_renderService"]>["_renderer"]
+  >["value"]
+>;
+
+function terminalRendererNeedsVisibilityRepair(input: {
+  renderer: ActiveTerminalRenderer | undefined;
+  dpr: number;
+}): boolean {
+  const renderer = input.renderer;
+  if (!renderer) {
+    return false;
+  }
+  if (typeof renderer._devicePixelRatio === "number" && renderer._devicePixelRatio !== input.dpr) {
+    return true;
+  }
+  const canvas = renderer._canvas ?? renderer._gl?.canvas;
+  const expected = renderer.dimensions?.device?.canvas;
+  if (!canvas || !expected?.width) {
+    return false;
+  }
+  // xterm rounds its CSS canvas size before converting to device pixels;
+  // tolerate that round trip instead of forcing a rebuild on every restore.
+  const tolerance = Math.max(1, Math.ceil(input.dpr / 2));
+  return (
+    Math.abs((canvas.width ?? 0) - expected.width) > tolerance ||
+    Math.abs((canvas.height ?? 0) - (expected.height ?? 0)) > tolerance
+  );
+}
+
 interface TerminalEmulatorRuntimeDisposables {
   disposeInput: () => void;
   disconnectResizeObserver: () => void;
@@ -260,12 +312,44 @@ export class TerminalEmulatorRuntime {
     }
 
     this.fitAndEmitResize?.({ forceRefresh: true, shouldClaim: false });
+    this.repairTerminalAfterVisibilityRestore();
     if (typeof window.requestAnimationFrame === "function") {
       window.requestAnimationFrame(() => {
         this.fitAndEmitResize?.({ forceRefresh: true, shouldClaim: false });
+        this.repairTerminalAfterVisibilityRestore();
       });
     }
   };
+
+  // While the window is occluded, output can corrupt the WebGL glyph atlas
+  // without a context-loss event, and a devicePixelRatio change leaves the
+  // canvas backing store at the old scale — xterm's DPR observer misses
+  // changes that land while the element has no box. Both paint a smeared
+  // viewport until the next real resize; repair here on every restore.
+  private repairTerminalAfterVisibilityRestore(): void {
+    const terminal = this.terminal;
+    if (!terminal) {
+      return;
+    }
+
+    const renderer = (terminal as unknown as TerminalRendererInternals)._core?._renderService
+      ?._renderer?.value;
+    if (terminalRendererNeedsVisibilityRepair({ renderer, dpr: window.devicePixelRatio || 1 })) {
+      try {
+        renderer?.handleDevicePixelRatioChange?.();
+        renderer?.handleResize?.(terminal.cols, terminal.rows);
+      } catch {
+        // renderer may be mid-teardown; the next restore retries
+      }
+    }
+
+    try {
+      terminal.clearTextureAtlas();
+    } catch {
+      // ignore
+    }
+    this.refreshVisibleRows();
+  }
 
   setCallbacks(input: { callbacks: TerminalEmulatorRuntimeCallbacks }): void {
     this.callbacks = input.callbacks;
