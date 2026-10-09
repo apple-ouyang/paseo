@@ -724,4 +724,41 @@ describe("terminal emulator runtime in a real browser", () => {
 
     expect(clearTextureAtlas).not.toHaveBeenCalled();
   });
+
+  it("re-fits the grid to the container after a snapshot restores a stale width", async () => {
+    await page.viewport(900, 600);
+    const mounted = createTerminalHost({ width: 720, height: 360 });
+
+    await waitFor({ predicate: () => mounted.sizes.length > 0 });
+    await settleMountRefits();
+
+    const terminal = getBrowserTerminal();
+    const fitted = { rows: terminal.rows, cols: terminal.cols };
+    expect(fitted.cols).toBeGreaterThan(40);
+
+    // A remount replays the cached snapshot, which resizes the grid to the
+    // width recorded when the snapshot was produced — possibly a stale daemon
+    // width. After the write commits the grid must return to the container's
+    // fitted size, otherwise the pane stays desynced until a manual resize.
+    let committed = false;
+    mounted.runtime.renderSnapshot({
+      state: {
+        rows: 10,
+        cols: 40,
+        scrollback: [],
+        grid: [[{ char: "x" }]],
+        cursor: { row: 0, col: 1 },
+      },
+      onCommitted: () => {
+        committed = true;
+      },
+    });
+
+    await waitFor({ predicate: () => committed });
+    // The scrollbar appearing for the deep snapshot can cost one column; the
+    // contract is that the grid returns to the container's fitted size instead
+    // of staying pinned at the snapshot's recorded width.
+    expect(terminal.cols).toBeGreaterThanOrEqual(fitted.cols - 1);
+    expect(terminal.rows).toBe(fitted.rows);
+  });
 });

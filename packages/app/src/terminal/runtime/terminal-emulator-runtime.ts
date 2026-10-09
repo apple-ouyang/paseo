@@ -1244,6 +1244,14 @@ export class TerminalEmulatorRuntime {
 
     try {
       terminal.write(data, () => {
+        if (operation.type === "snapshot") {
+          // The snapshot op resized the grid to the width recorded when the
+          // snapshot was produced — which can be stale (a cached snapshot from
+          // an older layout, or a daemon width owned by another client). Re-fit
+          // the grid to the real container and emit so the daemon can resync;
+          // same-size emits are deduplicated downstream.
+          this.fitAndEmitResize?.({ shouldClaim: false });
+        }
         finalizeOperation(operation);
       });
     } catch {
