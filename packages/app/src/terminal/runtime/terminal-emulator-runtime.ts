@@ -305,6 +305,7 @@ export class TerminalEmulatorRuntime {
   private readonly inputModeTracker = new TerminalInputModeTracker();
   private lastInputModeState: TerminalInputModeState = this.inputModeTracker.getState();
   private themeBackgroundElements: HTMLElement[] = [];
+  private containerWasHidden = false;
 
   private handleVisibilityRestore = (): void => {
     if (typeof document !== "undefined" && document.visibilityState !== "visible") {
@@ -704,6 +705,10 @@ export class TerminalEmulatorRuntime {
       }
 
       if (input.root.offsetWidth === 0 || input.root.offsetHeight === 0) {
+        // A RetainedPanel sets display:none on inactive workspaces; remember
+        // we were hidden so the first real fit after reveal repairs the
+        // renderer — the same corruption the window-visibility path repairs.
+        this.containerWasHidden = true;
         return;
       }
 
@@ -711,6 +716,12 @@ export class TerminalEmulatorRuntime {
         currentFitAddon.fit();
       } catch {
         return;
+      }
+
+      const wasContainerHidden = this.containerWasHidden;
+      this.containerWasHidden = false;
+      if (wasContainerHidden) {
+        this.repairTerminalAfterVisibilityRestore();
       }
 
       const nextRows = currentTerminal.rows;

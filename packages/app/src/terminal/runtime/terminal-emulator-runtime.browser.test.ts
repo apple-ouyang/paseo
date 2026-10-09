@@ -679,4 +679,45 @@ describe("terminal emulator runtime in a real browser", () => {
     expect(mounted.openedUrls).toEqual(["https://example.com/plain", "https://example.com/osc8"]);
     expect(confirm).not.toHaveBeenCalled();
   });
+
+  it("repairs the renderer on the first fit after a hidden container is revealed", async () => {
+    await page.viewport(900, 600);
+    const mounted = createTerminalHost({ width: 720, height: 360 });
+
+    await waitFor({ predicate: () => mounted.sizes.length > 0 });
+    await settleMountRefits();
+
+    const terminal = window.__paseoTerminal as unknown as {
+      clearTextureAtlas: () => void;
+    };
+    const clearTextureAtlas = vi.spyOn(terminal, "clearTextureAtlas");
+
+    // RetainedPanel hides inactive workspaces with display:none, which zeroes
+    // the box; the zero-size fit records that and returns.
+    mounted.root.style.display = "none";
+    mounted.runtime.resize({ forceRefresh: true });
+    mounted.root.style.display = "";
+    mounted.runtime.resize({ forceRefresh: true });
+
+    expect(clearTextureAtlas).toHaveBeenCalled();
+  });
+
+  it("does not repair the renderer on ordinary resizes", async () => {
+    await page.viewport(900, 600);
+    const mounted = createTerminalHost({ width: 720, height: 360 });
+
+    await waitFor({ predicate: () => mounted.sizes.length > 0 });
+    await settleMountRefits();
+
+    const terminal = window.__paseoTerminal as unknown as {
+      clearTextureAtlas: () => void;
+    };
+    const clearTextureAtlas = vi.spyOn(terminal, "clearTextureAtlas");
+
+    mounted.root.style.width = "360px";
+    mounted.runtime.resize({ forceRefresh: true });
+    mounted.runtime.resize();
+
+    expect(clearTextureAtlas).not.toHaveBeenCalled();
+  });
 });
