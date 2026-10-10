@@ -761,4 +761,30 @@ describe("terminal emulator runtime in a real browser", () => {
     expect(terminal.cols).toBeGreaterThanOrEqual(fitted.cols - 1);
     expect(terminal.rows).toBe(fitted.rows);
   });
+
+  it("repairs and re-emits when a detached offscreen pane re-enters the viewport", async () => {
+    await page.viewport(900, 600);
+    const mounted = createTerminalHost({ width: 720, height: 360 });
+
+    await waitFor({ predicate: () => mounted.sizes.length > 0 });
+    await settleMountRefits();
+
+    const terminal = window.__paseoTerminal as unknown as {
+      clearTextureAtlas: () => void;
+    };
+    const clearTextureAtlas = vi.spyOn(terminal, "clearTextureAtlas");
+
+    // Detached hiding parks the panel offscreen while keeping its box — so
+    // ResizeObserver and the zero-size path see nothing. Only the viewport
+    // intersection flips, which must drive the visibility-restore path.
+    mounted.root.style.position = "fixed";
+    mounted.root.style.top = "-50000px";
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    mounted.root.style.position = "";
+    mounted.root.style.top = "";
+
+    const sizesBefore = mounted.sizes.length;
+    await waitFor({ predicate: () => clearTextureAtlas.mock.calls.length > 0 });
+    await waitFor({ predicate: () => mounted.sizes.length > sizesBefore });
+  });
 });

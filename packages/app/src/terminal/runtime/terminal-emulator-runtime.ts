@@ -778,6 +778,29 @@ export class TerminalEmulatorRuntime {
     resizeObserver.observe(input.root);
     resizeObserver.observe(input.host);
 
+    // Retained panels are hidden without changing the element's box — either
+    // display:none (zeroes it) or detached offscreen positioning (keeps it at
+    // e.g. top:30000). ResizeObserver never fires on reveal in either case, so
+    // nothing refits or resyncs the PTY until a manual resize. An offscreen or
+    // boxless element is not intersecting, so watch the viewport boundary
+    // instead and run the visibility-restore path on every reveal.
+    let wasIntersecting = true;
+    const intersectionObserver =
+      typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver((entries) => {
+            const entry = entries[0];
+            if (!entry) {
+              return;
+            }
+            const isIntersecting = entry.isIntersecting;
+            if (isIntersecting && !wasIntersecting) {
+              this.handleVisibilityRestore();
+            }
+            wasIntersecting = isIntersecting;
+          });
+    intersectionObserver?.observe(input.root);
+
     const windowResizeHandler = () => {
       fitAndEmitResize({ shouldClaim: false });
     };
@@ -834,6 +857,7 @@ export class TerminalEmulatorRuntime {
       },
       disconnectResizeObserver: () => {
         resizeObserver.disconnect();
+        intersectionObserver?.disconnect();
       },
       removeWindowResize: () => {
         window.removeEventListener("resize", windowResizeHandler);
