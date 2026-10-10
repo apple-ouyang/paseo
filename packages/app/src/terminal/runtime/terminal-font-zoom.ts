@@ -247,13 +247,19 @@ function installTerminalFontZoomWheel(
   }
   host.__paseoTerminalZoomWheel = true;
   let remainder = 0;
+  let remainderTarget: unknown = null;
   document.addEventListener(
     "wheel",
     (event) => {
-      const zoom = terminalFontZoomStepsFromWheel(event, remainder);
-      if (!zoom) return;
       const textarea = helperTextareaFromWheelTarget(event.target);
-      if (!textarea) return;
+      const continued = textarea !== null && textarea === remainderTarget;
+      const zoom = terminalFontZoomStepsFromWheel(event, continued ? remainder : 0);
+      if (!zoom || !textarea) {
+        remainder = 0;
+        remainderTarget = null;
+        return;
+      }
+      remainderTarget = textarea;
       remainder = zoom.remainder;
       event.preventDefault();
       event.stopPropagation();

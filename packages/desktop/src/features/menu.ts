@@ -44,6 +44,7 @@ export interface ViewZoomTarget {
   getZoomLevel(): number;
   setZoomLevel(level: number): void;
   executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
+  isDestroyed?(): boolean;
 }
 
 export async function applyViewZoom(
@@ -60,7 +61,7 @@ export async function applyViewZoom(
   } catch {
     handled = false;
   }
-  if (handled) {
+  if (handled || target.isDestroyed?.()) {
     return;
   }
   if (direction === "reset") {
@@ -68,6 +69,10 @@ export async function applyViewZoom(
     return;
   }
   target.setZoomLevel(target.getZoomLevel() + (direction === "in" ? 0.5 : -0.5));
+}
+
+export function requestViewZoom(target: ViewZoomTarget, direction: ViewZoomDirection): void {
+  void applyViewZoom(target, direction).catch(() => {});
 }
 
 export function reloadActiveBrowserOrWindow({
@@ -154,7 +159,7 @@ function buildApplicationMenuTemplate(
           accelerator: "CmdOrCtrl+=",
           enabled: zoomEnabled,
           click: withBrowserWindow((win) => {
-            void applyViewZoom(win.webContents, "in");
+            requestViewZoom(win.webContents, "in");
           }),
         },
         {
@@ -162,7 +167,7 @@ function buildApplicationMenuTemplate(
           accelerator: "CmdOrCtrl+-",
           enabled: zoomEnabled,
           click: withBrowserWindow((win) => {
-            void applyViewZoom(win.webContents, "out");
+            requestViewZoom(win.webContents, "out");
           }),
         },
         {
@@ -170,7 +175,7 @@ function buildApplicationMenuTemplate(
           accelerator: "CmdOrCtrl+0",
           enabled: zoomEnabled,
           click: withBrowserWindow((win) => {
-            void applyViewZoom(win.webContents, "reset");
+            requestViewZoom(win.webContents, "reset");
           }),
         },
         { type: "separator" },

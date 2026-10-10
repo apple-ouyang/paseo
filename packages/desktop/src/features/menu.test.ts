@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyViewZoom, reloadActiveBrowserOrWindow, type ViewZoomDirection } from "./menu.js";
+import {
+  applyViewZoom,
+  reloadActiveBrowserOrWindow,
+  requestViewZoom,
+  type ViewZoomDirection,
+} from "./menu.js";
 
 class FakeWebContents {
   public readonly reloads: string[] = [];
@@ -73,13 +78,24 @@ class FakeZoomTarget {
   public level = 1;
   public scriptResult: unknown = false;
   public throwScript = false;
+  public destroyed = false;
+  public throwOnZoom = false;
+  public zoomCalls = 0;
   public readonly scripts: Array<{ code: string; userGesture?: boolean }> = [];
+
+  public isDestroyed(): boolean {
+    return this.destroyed;
+  }
 
   public getZoomLevel(): number {
     return this.level;
   }
 
   public setZoomLevel(level: number): void {
+    this.zoomCalls += 1;
+    if (this.throwOnZoom) {
+      throw new Error("webContents destroyed");
+    }
     this.level = level;
   }
 
@@ -127,5 +143,30 @@ describe("applyViewZoom", () => {
     await applyViewZoom(target, "out");
 
     expect(target.level).toBe(0.5);
+    expect(target.zoomCalls).toBe(1);
+  });
+
+  it("skips window zoom when the window closed during the page script", async () => {
+    const target = new FakeZoomTarget();
+    target.throwScript = true;
+    target.destroyed = true;
+
+    await applyViewZoom(target, "out");
+
+    expect(target.zoomCalls).toBe(0);
+    expect(target.level).toBe(1);
+  });
+
+  it("swallows a zoom error after the window closes", async () => {
+    const target = new FakeZoomTarget();
+    target.throwOnZoom = true;
+
+    requestViewZoom(target, "in");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(target.zoomCalls).toBe(1);
+    expect(target.level).toBe(1);
   });
 });

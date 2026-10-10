@@ -233,6 +233,55 @@ describe("terminal font zoom", () => {
     (globalThis as { document?: unknown }).document = previousDocument;
   });
 
+  it("keeps a partial cmd wheel on one terminal and drops it when the pointer moves", () => {
+    const registry = new TerminalFontZoomRegistry<ReturnType<typeof terminal>>();
+    const first = terminal(12);
+    const second = terminal(12);
+    registry.register({ terminal: first, fit: first.fit, baseFontSize: 12 });
+    registry.register({ terminal: second, fit: second.fit, baseFontSize: 12 });
+    const listeners: Array<(event: Event) => void> = [];
+    const previousDocument = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: { addEventListener: typeof document.addEventListener } }).document =
+      {
+        addEventListener(type, listener) {
+          if (type === "wheel" && typeof listener === "function") listeners.push(listener);
+        },
+      } as Document;
+    installTerminalFontZoomBridge(registry);
+
+    const wheel = (pane: ReturnType<typeof terminal> | null, deltaY: number, metaKey = true) => {
+      listeners[0]?.({
+        ctrlKey: false,
+        metaKey,
+        altKey: false,
+        shiftKey: false,
+        deltaY,
+        deltaMode: 0,
+        target: {
+          closest: () => (pane ? { querySelector: () => pane.textarea } : null),
+        },
+        preventDefault() {},
+        stopPropagation() {},
+      } as unknown as Event);
+    };
+
+    wheel(first, -80);
+    wheel(second, -20);
+    expect(first.options.fontSize).toBe(12);
+    expect(second.options.fontSize).toBe(12);
+
+    wheel(first, -40);
+    wheel(first, -60);
+    expect(first.options.fontSize).toBe(13);
+    expect(second.options.fontSize).toBe(12);
+
+    wheel(first, -80);
+    wheel(null, -20);
+    wheel(first, -20);
+    expect(first.options.fontSize).toBe(13);
+    (globalThis as { document?: unknown }).document = previousDocument;
+  });
+
   it("saves the zoomed size and restores it on the next terminal", () => {
     const storage = memoryStorage();
     const first = new TerminalFontZoomRegistry<ReturnType<typeof terminal>>(storage);
