@@ -587,12 +587,6 @@ interface AssistantTurnFooterProps {
   completedAt?: Date;
   durationMs?: number | null;
   onFork?: (target: AssistantForkTarget) => Promise<void> | void;
-  /**
-   * Desktop web hides the copy/fork actions until the footer strip is hovered;
-   * native and compact layouts keep them visible. The timing label stays
-   * visible either way so there is always an affordance to aim at.
-   */
-  actionsVisible?: boolean;
 }
 
 const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
@@ -607,17 +601,6 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
     paddingTop: theme.spacing[1],
     marginTop: 0,
     marginLeft: -theme.spacing[1],
-  },
-  actions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-  },
-  actionsHidden: {
-    opacity: 0,
-  },
-  actionsVisible: {
-    opacity: 1,
   },
   labelWrapper: {
     position: "relative",
@@ -648,7 +631,6 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   completedAt,
   durationMs,
   onFork,
-  actionsVisible = true,
 }: AssistantTurnFooterProps) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
@@ -698,25 +680,14 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
     [onFork],
   );
   const canFork = Boolean(onFork);
-  const actionsStyle = useMemo(
-    () => [
-      assistantTurnFooterStylesheet.actions,
-      actionsVisible
-        ? assistantTurnFooterStylesheet.actionsVisible
-        : assistantTurnFooterStylesheet.actionsHidden,
-    ],
-    [actionsVisible],
-  );
 
   return (
     <View style={assistantTurnFooterStylesheet.container}>
-      <View style={actionsStyle} pointerEvents={actionsVisible ? "auto" : "none"}>
-        <TurnCopyButton
-          getContent={getContent}
-          containerStyle={assistantTurnFooterStylesheet.copyButton}
-        />
-        {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
-      </View>
+      <TurnCopyButton
+        getContent={getContent}
+        containerStyle={assistantTurnFooterStylesheet.copyButton}
+      />
+      {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
       {primaryLabel ? (
         <Pressable
           onPress={handlePress}

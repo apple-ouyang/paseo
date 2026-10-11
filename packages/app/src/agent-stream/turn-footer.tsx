@@ -1,7 +1,5 @@
-import React, { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import React, { memo, useCallback, useMemo, type ReactNode } from "react";
 import { View } from "react-native";
-import { isNative } from "@/constants/platform";
-import { useIsCompactFormFactor } from "@/constants/layout";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { SPACING, type Theme } from "@/styles/theme";
 import type { TurnTiming } from "@/timeline/turn-time";
@@ -117,11 +115,9 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
 const WorkingIndicator = memo(function WorkingIndicator({
   inFlightTurnStartedAt = null,
   onForkInFlightTurn,
-  actionsVisible = true,
 }: {
   inFlightTurnStartedAt?: Date | null;
   onForkInFlightTurn?: InFlightTurnForkHandler;
-  actionsVisible?: boolean;
 }) {
   const active = useRetainedPanelActive();
   return (
@@ -130,14 +126,7 @@ const WorkingIndicator = memo(function WorkingIndicator({
         <ThemedSyncedLoader size={14} uniProps={workingIndicatorColorMapping} />
       </View>
       {/* Match the completed-turn footer: actions precede timing metadata. */}
-      {onForkInFlightTurn ? (
-        <View
-          style={actionsVisible ? undefined : stylesheet.actionsHidden}
-          pointerEvents={actionsVisible ? "auto" : "none"}
-        >
-          <AssistantForkMenu onFork={onForkInFlightTurn} />
-        </View>
-      ) : null}
+      {onForkInFlightTurn ? <AssistantForkMenu onFork={onForkInFlightTurn} /> : null}
       {inFlightTurnStartedAt ? (
         <LiveElapsed
           startedAt={inFlightTurnStartedAt}
@@ -157,21 +146,11 @@ function RunningTurnFooter({
   inFlightTurnStartedAt: Date | null;
   onForkInFlightTurn?: InFlightTurnForkHandler;
 }) {
-  const isCompact = useIsCompactFormFactor();
-  const [isHovered, setIsHovered] = useState(false);
-  const handlePointerEnter = useCallback(() => setIsHovered(true), []);
-  const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   return (
-    <View
-      style={stylesheet.turnFooterSlot}
-      testID="turn-working-indicator"
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
-    >
+    <View style={stylesheet.turnFooterSlot} testID="turn-working-indicator">
       <WorkingIndicator
         inFlightTurnStartedAt={inFlightTurnStartedAt}
         onForkInFlightTurn={onForkInFlightTurn}
-        actionsVisible={isCompact || isNative || isHovered}
       />
     </View>
   );
@@ -215,22 +194,13 @@ function CompletedTurnFooter({
     },
     [boundary, onForkAssistantTurn],
   );
-  const isCompact = useIsCompactFormFactor();
-  const [isHovered, setIsHovered] = useState(false);
-  const handlePointerEnter = useCallback(() => setIsHovered(true), []);
-  const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   return (
-    <View
-      style={stylesheet.turnFooterSlot}
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
-    >
+    <View style={stylesheet.turnFooterSlot}>
       <AssistantTurnFooter
         getContent={getContent}
         completedAt={timing?.completedAt}
         durationMs={timing?.durationMs}
         onFork={boundary && onForkAssistantTurn ? handleFork : undefined}
-        actionsVisible={isCompact || isNative || isHovered}
       />
     </View>
   );
@@ -254,14 +224,9 @@ const stylesheet = StyleSheet.create((theme) => ({
   turnFooterSlot: {
     flexDirection: "row",
     alignItems: "center",
-    // Stretch the strip across the row so the whole footer area — not only
-    // the label glyphs — is the hover target that reveals the actions.
-    alignSelf: "stretch",
+    alignSelf: "flex-start",
     minHeight: 24,
     paddingBottom: TURN_FOOTER_BOTTOM_SPACING,
-  },
-  actionsHidden: {
-    opacity: 0,
   },
   turnFooterContent: {
     height: 24,
