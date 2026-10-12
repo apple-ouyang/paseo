@@ -4446,7 +4446,7 @@ const modelState = () =>
           { modelId: "advertised-other", name: "Advertised other" },
         ],
       };
-new AgentSideConnection(
+const connection = new AgentSideConnection(
   () => ({
     async initialize() {
       return { protocolVersion: PROTOCOL_VERSION, agentCapabilities: { loadSession: true } };
@@ -4463,7 +4463,11 @@ new AgentSideConnection(
     },
     async authenticate() {},
     async cancel() {},
-    async prompt() {
+    async prompt({ sessionId }) {
+      await connection.sessionUpdate({
+        sessionId,
+        update: { sessionUpdate: "usage_update", used: 173397, size: 1000000 },
+      });
       return { stopReason: "end_turn" };
     },
   }),
@@ -4490,8 +4494,8 @@ describe("custom ACP provider with configured models", () => {
 
   function buildRegistry(
     override: {
-      models?: Array<{ id: string; label: string }>;
-      additionalModels?: Array<{ id: string; label: string }>;
+      models?: Array<{ id: string; label: string; contextWindowMaxTokens?: number }>;
+      additionalModels?: Array<{ id: string; label: string; contextWindowMaxTokens?: number }>;
     },
     agentEnv: Record<string, string> = {},
   ) {
@@ -4565,6 +4569,31 @@ describe("custom ACP provider with configured models", () => {
     );
 
     expect((await session.getRuntimeInfo()).model).toBe("stealth/pixel-canary");
+  });
+
+  test("keeps a configured context-window pin on a resumed session", async () => {
+    const registry = buildRegistry({
+      additionalModels: [
+        { id: "stealth/pixel-canary", label: "Pixel Canary", contextWindowMaxTokens: 217_000 },
+      ],
+    });
+    const client = registry.permissive.createClient(createTestLogger());
+
+    session = await client.resumeSession(
+      { provider: "permissive", sessionId: "permissive-session", metadata: { cwd: dir } },
+      { model: "stealth/pixel-canary" },
+    );
+
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.run("turn");
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "usage_updated",
+        usage: { contextWindowMaxTokens: 217_000, contextWindowUsedTokens: 173_397 },
+      }),
+    );
   });
 
   test("keeps the agent's model when the requested model is neither advertised nor configured", async () => {

@@ -1071,6 +1071,7 @@ export class ACPAgentClient implements AgentClient {
       handle,
       resumePurpose: options?.purpose,
       configuredModelIds: options?.configuredModelIds,
+      modelContextWindowMaxTokens: options?.modelContextWindowMaxTokens,
       agentId: launchContext?.agentId,
       launchEnv: launchContext?.env,
       extensionCommandsParser: this.extensionCommandsParser,
@@ -3240,10 +3241,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     // window the provider reports. ACP agents advertise the model's raw window
     // (Opus 5.5 reports 1M) even when their own compaction limit is much lower, so
     // the reported size alone can make the meter's percentage meaningless.
-    const configuredContextWindowMaxTokens =
-      this.currentModel !== null
-        ? this.modelContextWindowMaxTokens.get(this.currentModel)
-        : undefined;
+    let configuredContextWindowMaxTokens: number | undefined;
+    if (this.currentModel !== null) {
+      configuredContextWindowMaxTokens = this.modelContextWindowMaxTokens.get(this.currentModel);
+    }
     const reportedContextWindowMaxTokens =
       Number.isFinite(update.size) && update.size > 0 ? update.size : undefined;
     const contextWindowMaxTokens =
