@@ -49,6 +49,27 @@ describe("math segments", () => {
     expect(hasMath("an open $x stays text")).toBe(false);
   });
 
+  it("keeps an escaped dollar inside a formula", () => {
+    expect(splitMathSegments("$a + \\$ + b$")).toEqual([
+      { kind: "math", tex: "a + \\$ + b", display: false },
+    ]);
+  });
+
+  it("does not turn a streaming display opener into inline math", () => {
+    expect(splitMathSegments("$$x$")).toEqual([{ kind: "text", text: "$$x$" }]);
+  });
+
+  it("closes a code span only on a run of the same length", () => {
+    expect(splitMathSegments("``code ``` $x$``")).toEqual([
+      { kind: "text", text: "``code ``` $x$``" },
+    ]);
+  });
+
+  it("scans a price list once", () => {
+    const prices = Array.from({ length: 200 }, (_, index) => `$${index + 1}`).join(" ");
+    expect(hasMath(prices)).toBe(false);
+  });
+
   it("requires a non-space character after the opening dollar", () => {
     expect(hasMath("$ x $")).toBe(false);
   });

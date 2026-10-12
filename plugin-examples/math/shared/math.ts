@@ -61,11 +61,18 @@ function consumeFence(text: string, position: number): number | null {
   return text.length;
 }
 
-/** End of the inline code span that starts here. */
+/** End of the inline code span that starts here. A closer is a run of the same length. */
 function consumeCodeSpan(text: string, position: number): number {
   const run = /^`+/.exec(text.slice(position))?.[0] ?? "`";
-  const close = text.indexOf(run, position + run.length);
-  return close === -1 ? position + run.length : close + run.length;
+  let scan = position + run.length;
+  while (scan < text.length) {
+    const next = text.indexOf("`", scan);
+    if (next === -1) return position + run.length;
+    const candidate = /^`+/.exec(text.slice(next))?.[0] ?? "`";
+    if (candidate.length === run.length) return next + candidate.length;
+    scan = next + candidate.length;
+  }
+  return position + run.length;
 }
 
 function displayDelimiterAt(text: string, position: number): Delimiter | null {
@@ -85,11 +92,13 @@ function findInlineClose(text: string, from: number, close: string): number {
   for (let position = from; position < text.length; position += 1) {
     const character = text[position];
     if (character === "\n") return -1;
-    if (close === "\\)") {
-      if (character === "\\" && text[position + 1] === ")") return position;
+    if (character === "\\") {
+      if (close === "\\)" && text[position + 1] === ")") return position;
+      // An escaped dollar is TeX, not a delimiter.
+      position += 1;
       continue;
     }
-    if (character !== "$") continue;
+    if (close !== "$" || character !== "$") continue;
     // `$$` closes display math, not inline math.
     if (text[position + 1] === "$") continue;
     if (isWhitespace(text[position - 1])) continue;
@@ -99,24 +108,28 @@ function findInlineClose(text: string, from: number, close: string): number {
   return -1;
 }
 
-function closeIndex(text: string, position: number, delimiter: Delimiter): number {
-  if (delimiter.display) {
-    return text.indexOf(delimiter.close, position + delimiter.open.length);
-  }
-  return findInlineClose(text, position + delimiter.open.length, delimiter.close);
+interface MathMatch {
+  tex: string;
+  display: boolean;
+  next: number;
 }
 
-/** Math starting here, or null when the delimiters do not pair up. */
-function consumeMath(
+function readMath(
   text: string,
   position: number,
-): { tex: string; display: boolean; next: number } | null {
-  const delimiter = displayDelimiterAt(text, position) ?? inlineDelimiterAt(text, position);
-  if (delimiter === null) return null;
+  delimiter: Delimiter,
+  noInlineCloserFrom: number,
+): MathMatch | null {
   if (delimiter.open === "$" && isWhitespace(text[position + 1] ?? "")) return null;
-  const end = closeIndex(text, position, delimiter);
+  const start = position + delimiter.open.length;
+  let end: number;
+  if (delimiter.display) {
+    end = text.indexOf(delimiter.close, start);
+  } else {
+    end = start >= noInlineCloserFrom ? -1 : findInlineClose(text, start, delimiter.close);
+  }
   if (end <= position) return null;
-  const tex = text.slice(position + delimiter.open.length, end).trim();
+  const tex = text.slice(start, end).trim();
   if (tex.length === 0) return null;
   return { tex, display: delimiter.display, next: end + delimiter.close.length };
 }
@@ -125,6 +138,11 @@ export function splitMathSegments(text: string): MathSegment[] {
   const segments: MathSegment[] = [];
   let buffer = "";
   let position = 0;
+  // A failed inline scan proves the suffix holds no valid closer, so later
+  // openers can stop instead of rescanning it. A price list is a long line of
+  // `$` tokens with no valid closer, and rescanning would cost quadratic time
+  // inside the synchronous timeline transform.
+  let noInlineCloserFrom = Number.POSITIVE_INFINITY;
 
   const flushText = (): void => {
     if (buffer.length > 0) {
@@ -156,11 +174,21 @@ export function splitMathSegments(text: string): MathSegment[] {
       continue;
     }
 
-    const math = consumeMath(text, position);
-    if (math !== null) {
-      flushText();
-      segments.push({ kind: "math", tex: math.tex, display: math.display });
-      position = math.next;
+    const delimiter = displayDelimiterAt(text, position) ?? inlineDelimiterAt(text, position);
+    if (delimiter !== null) {
+      const math = readMath(text, position, delimiter, noInlineCloserFrom);
+      if (math !== null) {
+        flushText();
+        segments.push({ kind: "math", tex: math.tex, display: math.display });
+        position = math.next;
+        continue;
+      }
+      if (!delimiter.display) {
+        noInlineCloserFrom = Math.min(noInlineCloserFrom, position + delimiter.open.length);
+      }
+      // Consume the whole opener: `$$x$` must not retry from its second dollar.
+      buffer += delimiter.open;
+      position += delimiter.open.length;
       continue;
     }
 
