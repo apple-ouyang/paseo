@@ -114,11 +114,22 @@ interface MathMatch {
   next: number;
 }
 
+/**
+ * Result of the last failed inline scan: the scanned range `[from, lineEnd)`
+ * holds no valid closer, so a later opener inside that same range can stop
+ * without rescanning. Scoped to one line because inline math never crosses one.
+ */
+interface InlineScanMemo {
+  from: number;
+  lineEnd: number;
+  closer: string;
+}
+
 function readMath(
   text: string,
   position: number,
   delimiter: Delimiter,
-  noInlineCloserFrom: number,
+  memo: { value: InlineScanMemo | null },
 ): MathMatch | null {
   if (delimiter.open === "$" && isWhitespace(text[position + 1] ?? "")) return null;
   const start = position + delimiter.open.length;
@@ -126,7 +137,16 @@ function readMath(
   if (delimiter.display) {
     end = text.indexOf(delimiter.close, start);
   } else {
-    end = start >= noInlineCloserFrom ? -1 : findInlineClose(text, start, delimiter.close);
+    const stop = lineEnd(text, start);
+    const cached = memo.value;
+    end =
+      cached !== null &&
+      cached.closer === delimiter.close &&
+      start >= cached.from &&
+      stop === cached.lineEnd
+        ? -1
+        : findInlineClose(text, start, delimiter.close);
+    if (end < 0) memo.value = { from: start, lineEnd: stop, closer: delimiter.close };
   }
   if (end <= position) return null;
   const tex = text.slice(start, end).trim();
@@ -138,11 +158,10 @@ export function splitMathSegments(text: string): MathSegment[] {
   const segments: MathSegment[] = [];
   let buffer = "";
   let position = 0;
-  // A failed inline scan proves the suffix holds no valid closer, so later
-  // openers can stop instead of rescanning it. A price list is a long line of
-  // `$` tokens with no valid closer, and rescanning would cost quadratic time
-  // inside the synchronous timeline transform.
-  let noInlineCloserFrom = Number.POSITIVE_INFINITY;
+  // A price list is a long line of `$` tokens with no valid closer; rescanning
+  // the same suffix for every token would cost quadratic time inside the
+  // synchronous timeline transform.
+  const inlineScan: { value: InlineScanMemo | null } = { value: null };
 
   const flushText = (): void => {
     if (buffer.length > 0) {
@@ -176,15 +195,12 @@ export function splitMathSegments(text: string): MathSegment[] {
 
     const delimiter = displayDelimiterAt(text, position) ?? inlineDelimiterAt(text, position);
     if (delimiter !== null) {
-      const math = readMath(text, position, delimiter, noInlineCloserFrom);
+      const math = readMath(text, position, delimiter, inlineScan);
       if (math !== null) {
         flushText();
         segments.push({ kind: "math", tex: math.tex, display: math.display });
         position = math.next;
         continue;
-      }
-      if (!delimiter.display) {
-        noInlineCloserFrom = Math.min(noInlineCloserFrom, position + delimiter.open.length);
       }
       // Consume the whole opener: `$$x$` must not retry from its second dollar.
       buffer += delimiter.open;

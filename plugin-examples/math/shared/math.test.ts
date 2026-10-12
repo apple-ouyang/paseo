@@ -65,6 +65,20 @@ describe("math segments", () => {
     ]);
   });
 
+  it("keeps formulas on later lines after a price list", () => {
+    expect(splitMathSegments("$1 $2 $3\nlater $x$")).toEqual([
+      { kind: "text", text: "$1 $2 $3\nlater " },
+      { kind: "math", tex: "x", display: false },
+    ]);
+  });
+
+  it("keeps the parenthesis alias working after a rejected dollar", () => {
+    expect(splitMathSegments("cost $1 then \\(x\\)")).toEqual([
+      { kind: "text", text: "cost $1 then " },
+      { kind: "math", tex: "x", display: false },
+    ]);
+  });
+
   it("scans a price list once", () => {
     const prices = Array.from({ length: 200 }, (_, index) => `$${index + 1}`).join(" ");
     expect(hasMath(prices)).toBe(false);
