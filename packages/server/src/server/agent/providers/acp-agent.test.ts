@@ -198,6 +198,7 @@ function createSessionWithConfig(
     modeId?: string | null;
     model?: string | null;
     featureValues?: Record<string, unknown>;
+    modelContextWindowMaxTokens?: ReadonlyMap<string, number>;
   } = {},
   logger: ReturnType<typeof createTestLogger> = createTestLogger(),
 ): ACPAgentSession {
@@ -222,6 +223,9 @@ function createSessionWithConfig(
         supportsReasoningStream: true,
         supportsToolInvocations: true,
       },
+      ...(config.modelContextWindowMaxTokens
+        ? { modelContextWindowMaxTokens: config.modelContextWindowMaxTokens }
+        : {}),
     },
   );
 }
@@ -830,11 +834,13 @@ describe("mapACPUsage", () => {
 });
 
 describe("ACP context-window usage", () => {
-  async function emitUsageUpdate(update: {
-    used: number;
-    size: number;
-  }): Promise<{ events: unknown[] }> {
-    const session = createSessionWithConfig({ provider: "dsh" });
+  async function emitUsageUpdate(
+    update: {
+      used: number;
+      size: number;
+    },
+    session: ACPAgentSession = createSessionWithConfig({ provider: "dsh" }),
+  ): Promise<{ events: unknown[] }> {
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
     const events: unknown[] = [];
     session.subscribe((event) => {
@@ -855,6 +861,57 @@ describe("ACP context-window usage", () => {
         type: "usage_updated",
         provider: "dsh",
         usage: { contextWindowMaxTokens: 1_000_000, contextWindowUsedTokens: 13_759 },
+      },
+    ]);
+  });
+
+  test("a configured model context window pins the meter over the reported size", async () => {
+    const session = createSessionWithConfig({
+      provider: "devin",
+      model: "claude-opus-5-5-medium",
+      modelContextWindowMaxTokens: new Map([["claude-opus-5-5-medium", 217_000]]),
+    });
+    const { events } = await emitUsageUpdate({ used: 173_397, size: 1_000_000 }, session);
+
+    expect(events).toEqual([
+      {
+        type: "usage_updated",
+        provider: "devin",
+        usage: { contextWindowMaxTokens: 217_000, contextWindowUsedTokens: 173_397 },
+      },
+    ]);
+  });
+
+  test("a configured pin still drives a meter when the provider omits size", async () => {
+    const session = createSessionWithConfig({
+      provider: "devin",
+      model: "claude-opus-5-5-medium",
+      modelContextWindowMaxTokens: new Map([["claude-opus-5-5-medium", 217_000]]),
+    });
+    const { events } = await emitUsageUpdate({ used: 42_000, size: 0 }, session);
+
+    expect(events).toEqual([
+      {
+        type: "usage_updated",
+        provider: "devin",
+        usage: { contextWindowMaxTokens: 217_000, contextWindowUsedTokens: 42_000 },
+      },
+    ]);
+  });
+
+  test("a pin for another model does not leak into the selected model", async () => {
+    const session = createSessionWithConfig({
+      provider: "devin",
+      model: "swe-2-high",
+      modelContextWindowMaxTokens: new Map([["claude-opus-5-5-medium", 217_000]]),
+    });
+    const { events } = await emitUsageUpdate({ used: 13_759, size: 262_144 }, session);
+
+    expect(events).toEqual([
+      {
+        type: "usage_updated",
+        provider: "devin",
+        usage: { contextWindowMaxTokens: 262_144, contextWindowUsedTokens: 13_759 },
       },
     ]);
   });
