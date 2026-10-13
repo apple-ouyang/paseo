@@ -289,6 +289,11 @@ type ProviderSubagentManagerEvent = Extract<
 const LEGACY_PROVIDER_IDS = new Set(["claude", "codex", "opencode"]);
 const MIN_VERSION_ALL_PROVIDERS = "0.1.45";
 const MIN_VERSION_EXPLICIT_WORKSPACE_RECOVERY = "0.1.105";
+// "Rename with AI" summarizes every user message so the title follows where the
+// conversation went, not just where it started. Past this size the joined prompt
+// keeps its head and tail instead of the middle.
+const RETITLE_PROMPT_MAX_CHARS = 24000;
+const RETITLE_PROMPT_HEAD_CHARS = 8000;
 function errorToFriendlyMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -3402,7 +3407,7 @@ export class Session {
     };
   }
 
-  private async retitleAgentFromRecentPrompts(agentId: string, requestId: string): Promise<void> {
+  private async retitleAgentFromUserPrompts(agentId: string, requestId: string): Promise<void> {
     const respond = (accepted: boolean, error: string | null) =>
       this.emit({
         type: "update_agent_response" as const,
@@ -3415,13 +3420,11 @@ export class Session {
         logger: this.sessionLogger,
       });
       const rows = await this.agentManager.getTimelineRows(agentId);
-      const prompts = rows
-        .flatMap((row) => {
-          if (row.item.type !== "user_message") return [];
-          const text = row.item.text.trim();
-          return text.length > 0 ? [text] : [];
-        })
-        .slice(-5);
+      const prompts = rows.flatMap((row) => {
+        if (row.item.type !== "user_message") return [];
+        const text = row.item.text.trim();
+        return text.length > 0 ? [text] : [];
+      });
       if (prompts.length === 0) {
         respond(false, "no user messages to summarize");
         return;
@@ -3429,9 +3432,13 @@ export class Session {
       const stored = await this.agentStorage.get(agentId);
       const cwd = stored?.cwd ?? "";
       respond(true, null);
+      let prompt = prompts.join("\n\n");
+      if (prompt.length > RETITLE_PROMPT_MAX_CHARS) {
+        prompt = `${prompt.slice(0, RETITLE_PROMPT_HEAD_CHARS)}\n\n[...]\n\n${prompt.slice(RETITLE_PROMPT_HEAD_CHARS - RETITLE_PROMPT_MAX_CHARS)}`;
+      }
       const title = await this.workspaceAutoName.generateAgentTitle({
         cwd,
-        prompt: prompts.join("\n\n"),
+        prompt,
         currentSelection: this.getFocusedAgentSelectionForCwd(cwd),
       });
       if (title) {
@@ -3450,7 +3457,7 @@ export class Session {
     requestId: string,
   ): Promise<void> {
     if (name === undefined && labels?.["paseo.retitle"] === "1") {
-      await this.retitleAgentFromRecentPrompts(agentId, requestId);
+      await this.retitleAgentFromUserPrompts(agentId, requestId);
       return;
     }
     this.sessionLogger.info(
