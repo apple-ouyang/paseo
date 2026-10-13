@@ -80,12 +80,12 @@ describe("GenericACPAgentClient archived history", () => {
         { purpose: "history" },
       );
       try {
+        const pid = Number(await readFile(pidPath, "utf8"));
+        expect(isProcessAlive(pid)).toBe(false);
         expect(await collectTimelineText(session.streamHistory())).toEqual([
           "user_message:What is in the README?",
           "assistant_message:It describes the project.",
         ]);
-        const pid = Number(await readFile(pidPath, "utf8"));
-        await waitForProcessExit(pid, 10_000);
       } finally {
         await session.close();
       }
@@ -119,16 +119,6 @@ function isProcessAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (isProcessAlive(pid)) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Process ${pid} still running after ${timeoutMs}ms`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
 
