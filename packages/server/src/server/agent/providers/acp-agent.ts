@@ -1750,6 +1750,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private fallbackAssistantMessageId: string | null = null;
   private closed = false;
   private historyPending = false;
+  private historyRuntimeReleased = false;
   private replayingHistory = false;
   private bootstrapThreadEventPending = false;
   private readonly terminateProcess: ProcessTerminator;
@@ -1867,8 +1868,27 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       }
 
       await this.applyConfiguredOverrides();
+
+      if (this.resumePurpose === "history") {
+        await this.releaseHistoryRuntime();
+      }
     } catch (error) {
       await this.closeAfterInitializationFailure(error);
+    }
+  }
+
+  // History resumes exist to replay persisted events into the canonical
+  // timeline; the provider process is released once replay finishes so
+  // archived agents hold no resident runtime. Interactive work goes through
+  // reloadAgentSession, which spawns a fresh process.
+  private async releaseHistoryRuntime(): Promise<void> {
+    this.historyRuntimeReleased = true;
+    this.connection = null;
+    const child = this.child;
+    this.child = null;
+    this.settleCommandsReady();
+    if (child) {
+      await this.terminateProcess(child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 });
     }
   }
 
@@ -2841,7 +2861,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     });
     const spawnError = rejectOnSpawnError(child, stderrChunks);
     child.once("exit", (code, signal) => {
-      if (this.closed) {
+      if (this.closed || this.historyRuntimeReleased) {
         return;
       }
       if (this.activeForegroundTurnId) {
