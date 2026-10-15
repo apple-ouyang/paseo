@@ -643,6 +643,8 @@ export const en = {
         moveToMain: "Move to main panel",
         reloadAgent: "Reload agent",
         reloadAgentTooltip: "Reload agent to update skills, MCPs or login status.",
+        markAsUnread: "Mark as unread",
+        markAsRead: "Mark as read",
         close: "Close",
         renameTerminal: "Rename terminal",
         renameAgent: "Rename agent",

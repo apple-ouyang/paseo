@@ -365,4 +365,106 @@ describe("buildWorkspaceTabMenuEntries", () => {
     expect(agentSeparator?.key).toBe("rename-separator");
     expect(terminalSeparator?.key).toBe("rename-separator");
   });
+
+  it("inserts mark as unread before close-before for agent tabs", () => {
+    const onMarkUnread = vi.fn();
+    const tab = createAgentTab();
+    const entries = buildWorkspaceTabMenuEntries({
+      surface: "desktop",
+      tab,
+      index: 1,
+      tabCount: 3,
+      menuTestIDBase: "workspace-tab-context-agent_123",
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onCopyTerminalId: vi.fn(),
+      onCopyFilePath: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsBefore: vi.fn(),
+      onCloseTabsAfter: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+      attentionAction: "unread",
+      onMarkUnread,
+    });
+
+    const keys = entries.filter((entry) => entry.kind === "item").map((entry) => entry.key);
+    expect(keys.indexOf("mark-unread")).toBe(keys.indexOf("close-before") - 1);
+    const item = entries.find((entry) => entry.kind === "item" && entry.key === "mark-unread");
+    if (!item || item.kind !== "item") {
+      throw new Error("mark-unread entry missing");
+    }
+    expect(item.label).toBe("Mark as unread");
+    expect(item.icon).toBe("circle");
+    expect(item.testID).toBe("workspace-tab-context-agent_123-mark-unread");
+    item.onSelect();
+    expect(onMarkUnread).toHaveBeenCalledWith(tab);
+  });
+
+  it("inserts mark as read before close-before when attention is clearable", () => {
+    const onMarkAsRead = vi.fn();
+    const tab = createAgentTab();
+    const entries = buildWorkspaceTabMenuEntries({
+      surface: "desktop",
+      tab,
+      index: 0,
+      tabCount: 1,
+      menuTestIDBase: "workspace-tab-context-agent_123",
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onCopyTerminalId: vi.fn(),
+      onCopyFilePath: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsBefore: vi.fn(),
+      onCloseTabsAfter: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+      attentionAction: "read",
+      onMarkAsRead,
+    });
+
+    const item = entries.find((entry) => entry.kind === "item" && entry.key === "mark-read");
+    if (!item || item.kind !== "item") {
+      throw new Error("mark-read entry missing");
+    }
+    expect(item.label).toBe("Mark as read");
+    expect(item.icon).toBe("circle-check");
+    item.onSelect();
+    expect(onMarkAsRead).toHaveBeenCalledWith(tab);
+  });
+
+  it("omits attention actions for file tabs even when handlers are passed", () => {
+    const entries = buildWorkspaceTabMenuEntries({
+      surface: "desktop",
+      tab: {
+        key: "file_abc",
+        tabId: "file_abc",
+        kind: "file",
+        target: { kind: "file", path: "/some/path.ts", lineStart: 1, lineEnd: 10 },
+      },
+      index: 0,
+      tabCount: 1,
+      menuTestIDBase: "workspace-tab-context-file_abc",
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onCopyTerminalId: vi.fn(),
+      onCopyFilePath: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsBefore: vi.fn(),
+      onCloseTabsAfter: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+      attentionAction: "unread",
+      onMarkUnread: vi.fn(),
+      onMarkAsRead: vi.fn(),
+    });
+
+    expect(entries.some((entry) => entry.kind === "item" && entry.key === "mark-unread")).toBe(
+      false,
+    );
+    expect(entries.some((entry) => entry.kind === "item" && entry.key === "mark-read")).toBe(false);
+  });
 });

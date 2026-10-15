@@ -16,6 +16,8 @@ export interface WorkspaceTabMenuLabels {
   closeLeft: string;
   closeRight: string;
   closeOthers: string;
+  markAsUnread: string;
+  markAsRead: string;
   reloadAgent: string;
   reloadAgentTooltip: string;
   close: string;
@@ -32,6 +34,8 @@ export const DEFAULT_WORKSPACE_TAB_MENU_LABELS: WorkspaceTabMenuLabels = {
   closeLeft: i18n.t("workspace.tabs.menu.closeLeft"),
   closeRight: i18n.t("workspace.tabs.menu.closeRight"),
   closeOthers: i18n.t("workspace.tabs.menu.closeOthers"),
+  markAsUnread: i18n.t("workspace.tabs.menu.markAsUnread"),
+  markAsRead: i18n.t("workspace.tabs.menu.markAsRead"),
   reloadAgent: i18n.t("workspace.tabs.menu.reloadAgent"),
   reloadAgentTooltip: i18n.t("workspace.tabs.menu.reloadAgentTooltip"),
   close: i18n.t("workspace.tabs.menu.close"),
@@ -49,6 +53,8 @@ export type WorkspaceTabMenuEntry =
         | "arrow-right-to-line"
         | "copy-x"
         | "pencil"
+        | "circle"
+        | "circle-check"
         | "x";
       hint?: string;
       tooltip?: string;
@@ -78,6 +84,9 @@ interface BuildWorkspaceTabMenuEntriesInput {
   onCloseTabsBefore: (tabId: string) => Promise<void> | void;
   onCloseTabsAfter: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  attentionAction?: "unread" | "read" | null;
+  onMarkUnread?: (tab: WorkspaceTabDescriptor) => Promise<void> | void;
+  onMarkAsRead?: (tab: WorkspaceTabDescriptor) => Promise<void> | void;
   labels?: WorkspaceTabMenuLabels;
 }
 
@@ -95,6 +104,9 @@ interface BuildWorkspaceDesktopTabActionsInput {
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
   onCloseTabsToRight: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  attentionAction?: "unread" | "read" | null;
+  onMarkUnread?: (tab: WorkspaceTabDescriptor) => Promise<void> | void;
+  onMarkAsRead?: (tab: WorkspaceTabDescriptor) => Promise<void> | void;
   labels?: WorkspaceTabMenuLabels;
 }
 
@@ -182,6 +194,9 @@ export function buildWorkspaceTabMenuEntries(
     onCloseTabsBefore,
     onCloseTabsAfter,
     onCloseOtherTabs,
+    attentionAction,
+    onMarkUnread,
+    onMarkAsRead,
   } = input;
   const labels = input.labels ?? DEFAULT_WORKSPACE_TAB_MENU_LABELS;
   const isFirstTab = index === 0;
@@ -257,6 +272,31 @@ export function buildWorkspaceTabMenuEntries(
     entries.push({
       kind: "separator",
       key: "rename-separator",
+    });
+  }
+
+  if (tab.target.kind === "agent" && attentionAction === "unread" && onMarkUnread) {
+    entries.push({
+      kind: "item",
+      key: "mark-unread",
+      label: labels.markAsUnread,
+      icon: "circle",
+      testID: `${menuTestIDBase}-mark-unread`,
+      onSelect: () => {
+        void onMarkUnread(tab);
+      },
+    });
+  }
+  if (tab.target.kind === "agent" && attentionAction === "read" && onMarkAsRead) {
+    entries.push({
+      kind: "item",
+      key: "mark-read",
+      label: labels.markAsRead,
+      icon: "circle-check",
+      testID: `${menuTestIDBase}-mark-read`,
+      onSelect: () => {
+        void onMarkAsRead(tab);
+      },
     });
   }
 
@@ -343,6 +383,9 @@ export function buildWorkspaceDesktopTabActions(
       onCloseTabsBefore: input.onCloseTabsToLeft,
       onCloseTabsAfter: input.onCloseTabsToRight,
       onCloseOtherTabs: input.onCloseOtherTabs,
+      attentionAction: input.attentionAction,
+      onMarkUnread: input.onMarkUnread,
+      onMarkAsRead: input.onMarkAsRead,
       labels: input.labels,
     }),
     closeButtonTestId: getCloseButtonTestId(input.tab),

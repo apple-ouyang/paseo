@@ -653,6 +653,8 @@ export const ru: TranslationResources = {
         moveToMain: "Переместить на основную панель",
         reloadAgent: "Перезагрузить агента",
         reloadAgentTooltip: "Перезагрузите агента, чтобы обновить навыки, MCP или статус входа.",
+        markAsUnread: "Отметить как непрочитанное",
+        markAsRead: "Отметить как прочитанное",
         close: "Закрыть",
         renameTerminal: "Переименовать терминал",
         renameAgent: "Переименовать агента",
