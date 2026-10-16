@@ -1961,9 +1961,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
     // Stop can still be awaiting session/cancel while the old prompt already settled.
     // The connection is still set then, so a new turn has to wait before it sends.
-    if (this.stopReleased || this.releaseStopGate) {
-      await this.waitForStopToSettle();
-    }
+    await this.restoreStoppedSessionIfNeeded();
     if (this.closed) {
       throw new Error(`${this.provider} session is closed`);
     }
@@ -2114,6 +2112,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async setMode(modeId: string): Promise<void> {
+    await this.restoreStoppedSessionIfNeeded();
     if (!this.connection || !this.sessionId) {
       throw new Error("ACP session not initialized");
     }
@@ -2255,6 +2254,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async setModel(modelId: string | null): Promise<void> {
+    await this.restoreStoppedSessionIfNeeded();
     if (!this.connection || !this.sessionId) {
       throw new Error("ACP session not initialized");
     }
@@ -2360,6 +2360,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async setThinkingOption(thinkingOptionId: string | null): Promise<void> {
+    await this.restoreStoppedSessionIfNeeded();
+    await this.applyThinkingOption(thinkingOptionId);
+  }
+
+  private async applyThinkingOption(thinkingOptionId: string | null): Promise<void> {
     if (!this.connection || !this.sessionId) {
       throw new Error("ACP session not initialized");
     }
@@ -2411,6 +2416,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async setFeature(featureId: string, value: unknown): Promise<void> {
+    await this.restoreStoppedSessionIfNeeded();
+    await this.applyFeature(featureId, value);
+  }
+
+  private async applyFeature(featureId: string, value: unknown): Promise<void> {
     if (!this.connection || !this.sessionId) {
       throw new Error("ACP session not initialized");
     }
@@ -2654,6 +2664,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       });
     }
     await this.resumeAfterStopInFlight;
+  }
+
+  // Stop clears connection. Settings RPCs need the same reload as the next turn.
+  private async restoreStoppedSessionIfNeeded(): Promise<void> {
+    if (this.stopReleased || this.releaseStopGate) {
+      await this.waitForStopToSettle();
+    }
   }
 
   // initializeResumedSession reapplies config.modeId and config.model. Those fields
@@ -3149,7 +3166,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       }
     }
     if (this.config.thinkingOptionId && this.config.thinkingOptionId !== this.thinkingOptionId) {
-      await this.setThinkingOption(this.config.thinkingOptionId);
+      await this.applyThinkingOption(this.config.thinkingOptionId);
     }
     const configuredFeatureValues = this.config.featureValues ?? {};
     for (const featureOption of this.configFeatureOptions) {
@@ -3157,7 +3174,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         continue;
       }
       try {
-        await this.setFeature(featureOption.id, configuredFeatureValues[featureOption.id]);
+        await this.applyFeature(featureOption.id, configuredFeatureValues[featureOption.id]);
       } catch (error) {
         if (!this.isStaleFeatureValueError(error, featureOption.id, switchedModel)) {
           throw error;

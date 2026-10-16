@@ -5268,6 +5268,149 @@ describe("ACP stop releases a Grok process that continues after cancel", () => {
     expect(nextPrompt).toHaveBeenCalledOnce();
   });
 
+  test("changing grok settings after stop restores the session then applies them", async () => {
+    const terminator = new FakeTerminator("deferred");
+    const setSessionMode = vi.fn().mockResolvedValue(undefined);
+    const unstableSetSessionModel = vi.fn().mockResolvedValue(undefined);
+    const nextPrompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+    const loadSession = vi.fn(async () => ({
+      sessionId: "session-1",
+      modes: {
+        currentModeId: "plan",
+        availableModes: [
+          { id: "plan", name: "plan" },
+          { id: "code", name: "code" },
+        ],
+      },
+      models: {
+        currentModelId: "old-model",
+        availableModels: [
+          { modelId: "old-model", name: "old" },
+          { modelId: "new-model", name: "new" },
+        ],
+      },
+      configOptions: [],
+    }));
+    let spawned = 0;
+
+    class ResumeAfterKillSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        spawned += 1;
+        return {
+          child: createProbeChildStub(),
+          connection: {
+            prompt: nextPrompt,
+            cancel: vi.fn().mockResolvedValue(undefined),
+            loadSession,
+            setSessionMode,
+            unstable_setSessionModel: unstableSetSessionModel,
+          } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: { loadSession: true } },
+        } as SpawnedACPProcess;
+      }
+    }
+
+    const session = new ResumeAfterKillSession(
+      { provider: "grok", cwd: "/tmp/paseo-acp-test", modeId: "plan", model: "old-model" },
+      {
+        provider: "grok",
+        logger: createTestLogger(),
+        defaultCommand: ["grok", "agent", "stdio"],
+        defaultModes: [
+          { id: "plan", label: "plan" },
+          { id: "code", label: "code" },
+        ],
+        capabilities: sessionCapabilities,
+        terminateProcess: terminator.terminate,
+      },
+    );
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.child = createProbeChildStub();
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await session.startTurn("stop this");
+    await session.interrupt();
+
+    const modeChange = session.setMode("code");
+    await flushTurns();
+
+    expect(spawned).toBe(0);
+    expect(setSessionMode).not.toHaveBeenCalled();
+
+    terminator.releaseAll();
+    await modeChange;
+    await session.setModel("new-model");
+
+    expect(spawned).toBe(1);
+    expect(loadSession).toHaveBeenCalledOnce();
+    expect(setSessionMode).toHaveBeenCalledWith({ sessionId: "session-1", modeId: "code" });
+    expect(unstableSetSessionModel).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      modelId: "new-model",
+    });
+    expect(await session.getCurrentMode()).toBe("code");
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({ model: "new-model" });
+
+    await session.startTurn("continue");
+    expect(spawned).toBe(1);
+    expect(nextPrompt).toHaveBeenCalledOnce();
+  });
+
+  test("a grok kill timeout does not restore the session for a settings change", async () => {
+    const terminate: ProcessTerminator = async () => "kill-timeout";
+    let spawned = 0;
+
+    class ResumeAfterKillSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        spawned += 1;
+        return {
+          child: createProbeChildStub(),
+          connection: {
+            prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+            cancel: vi.fn().mockResolvedValue(undefined),
+            setSessionMode: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: { loadSession: true } },
+        } as SpawnedACPProcess;
+      }
+    }
+
+    const session = new ResumeAfterKillSession(
+      { provider: "grok", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "grok",
+        logger: createTestLogger(),
+        defaultCommand: ["grok", "agent", "stdio"],
+        defaultModes: [{ id: "code", label: "code" }],
+        capabilities: sessionCapabilities,
+        terminateProcess: terminate,
+      },
+    );
+    const internals = asInternals<StopInternals>(session);
+    internals.sessionId = "session-1";
+    internals.child = createProbeChildStub();
+    internals.connection = {
+      prompt: vi.fn(() => new Promise<PromptResponse>(() => {})),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await session.startTurn("stop this");
+    await session.interrupt();
+
+    await expect(session.setMode("code")).rejects.toThrow(
+      "ACP stop did not exit the provider process",
+    );
+    await expect(session.setModel("new-model")).rejects.toThrow(
+      "ACP stop did not exit the provider process",
+    );
+    expect(spawned).toBe(0);
+    expect(internals.connection).toBeNull();
+  });
+
   test("a permission request after grok stop is cancelled", async () => {
     const terminator = new FakeTerminator();
     const session = createStopSession("grok", terminator, {
