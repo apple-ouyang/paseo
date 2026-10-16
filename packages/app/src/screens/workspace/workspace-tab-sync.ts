@@ -60,7 +60,9 @@ const LAYOUT_PUBLISH_DEBOUNCE_MS = 150;
  * extend the suppression window of an earlier workspace/closed intent.
  * `inFlightOrders` is the FIFO of order values this client wrote that have
  * not yet been observed in the stored labels, so an undo can keep overlaying
- * and republishing while an older write is still echoing. */
+ * and republishing while an older write is still echoing. An echo of a rank
+ * retires every queued copy of that rank; a satisfied order is not kept just
+ * because duplicate publishes remain. */
 interface PendingTabLabelWrite {
   workspaceId?: { value: string; at: number };
   closed?: { value: boolean; at: number };
@@ -112,17 +114,18 @@ function acknowledgeOrderEcho(
 ): PendingTabLabelWrite {
   const storedOrder = stored?.[TAB_ORDER_LABEL] ?? "";
   const lastSeen = pending.lastSeenStoredOrder ?? "";
+  const inFlightOrders = pending.inFlightOrders ?? [];
   if (storedOrder === lastSeen) {
+    // A later echo of the same rank is a duplicate publish settling, not a
+    // new value. Drop every queued copy of that rank.
+    if (inFlightOrders.length > 0 && inFlightOrders.every((value) => value === storedOrder)) {
+      return { ...pending, inFlightOrders: [] };
+    }
     return pending;
-  }
-  const inFlightOrders = [...(pending.inFlightOrders ?? [])];
-  const idx = inFlightOrders.indexOf(storedOrder);
-  if (idx >= 0) {
-    inFlightOrders.splice(idx, 1);
   }
   return {
     ...pending,
-    inFlightOrders,
+    inFlightOrders: inFlightOrders.filter((value) => value !== storedOrder),
     lastSeenStoredOrder: storedOrder,
   };
 }
@@ -176,11 +179,11 @@ function retainLivePendingWrite(
   if (live.order !== undefined && pending.order) {
     next.order = pending.order;
   }
-  const orderUnexpired =
-    pending.order !== undefined && Date.now() - pending.order.at <= PENDING_LABEL_TTL_MS;
-  if (orderUnexpired && pending.inFlightOrders?.length) {
+  // Only keep in-flight writes while the local order is still live. A
+  // satisfied order whose remaining queue is duplicates of the echoed rank
+  // has settled and must not overlay a newer remote order.
+  if (live.order !== undefined && pending.inFlightOrders?.length) {
     next.inFlightOrders = [...pending.inFlightOrders];
-    next.order = pending.order;
   }
   if (
     next.workspaceId === undefined &&
@@ -516,11 +519,13 @@ function broadcastAgentTab(input: {
   // drag is marked pending before the debounced write, so `effective` already
   // matches the new rank and must not skip the publish. An undo that matches
   // the stored order still has to write if an older order write is in flight.
+  const pending = pendingLabels.get(pendingKey(serverId, agentId));
   const storedOrder = agentLabelsFor(serverId, agentId)?.[TAB_ORDER_LABEL];
-  if (
-    storedOrder === order &&
-    !olderOrderWriteInFlight(pendingLabels.get(pendingKey(serverId, agentId)), order)
-  ) {
+  if (storedOrder === order && !olderOrderWriteInFlight(pending, order)) {
+    return;
+  }
+  const inFlightOrders = pending?.inFlightOrders ?? [];
+  if (inFlightOrders[inFlightOrders.length - 1] === order) {
     return;
   }
   // Placement converged: write back only the order drift, marking it pending

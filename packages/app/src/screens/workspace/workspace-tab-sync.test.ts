@@ -590,4 +590,81 @@ describe("workspace tab sync", () => {
     });
     expect(agentTabIdsIn("ws-a")).toEqual(["agent-1", "agent-2"]);
   });
+
+  it("lets a remote newer order win after duplicate same-rank publishes echo", () => {
+    if (typeof document !== "undefined") {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    }
+    useSessionStore.getState().setAgents(
+      SERVER,
+      new Map([
+        ["agent-1", makeAgent("agent-1")],
+        ["agent-2", makeAgent("agent-2")],
+      ]),
+    );
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-2" },
+      intent: "reveal",
+      pin: true,
+    });
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000000",
+    });
+    setAgentLabels("agent-2", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000001",
+    });
+    echoWrites = false;
+    updateAgent.mockClear();
+
+    swapMainPaneAgentTabs("ws-a");
+    expect(agentTabIdsIn("ws-a")).toEqual(["agent-2", "agent-1"]);
+    vi.advanceTimersByTime(200);
+
+    const pane = collectAllPanes(
+      layoutStore.getState().layoutByWorkspace[workspaceKey("ws-a")]!.root,
+    ).find((candidate) => candidate.id === DEFAULT_PANE_ID)!;
+    const otherTabId = pane.tabIds.find((tabId) => tabId !== pane.focusedTabId) ?? pane.tabIds[0]!;
+    layoutStore.getState().focusTab(workspaceKey("ws-a"), otherTabId);
+    vi.advanceTimersByTime(200);
+
+    const swappedAgent1 = {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000001",
+    };
+    const swappedAgent2 = {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000000",
+    };
+    setAgentLabels("agent-1", swappedAgent1);
+    setAgentLabels("agent-2", swappedAgent2);
+    setAgentLabels("agent-1", swappedAgent1);
+    setAgentLabels("agent-2", swappedAgent2);
+    layoutStore.setState({} as never);
+    vi.advanceTimersByTime(200);
+
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000000",
+    });
+    setAgentLabels("agent-2", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000001",
+    });
+    expect(agentTabIdsIn("ws-a")).toEqual(["agent-1", "agent-2"]);
+  });
 });
