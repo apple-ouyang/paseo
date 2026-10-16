@@ -698,6 +698,7 @@ export const fr: TranslationResources = {
         reloadedAgent: "Agent rechargé",
         failedToReloadAgent: "Impossible de recharger l’agent",
         failedToRetitleAgent: "Impossible de renommer l’agent",
+        updateHostToRetitleAgent: "Mettez à jour l’hôte pour renommer avec l’IA.",
         failedToCloseAgent: "Impossible de fermer l’agent",
       },
       confirmations: {

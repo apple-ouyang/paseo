@@ -699,6 +699,7 @@ export const ru: TranslationResources = {
         reloadedAgent: "Агент перезагружен",
         failedToReloadAgent: "Не удалось перезагрузить агента",
         failedToRetitleAgent: "Не удалось переименовать агента",
+        updateHostToRetitleAgent: "Обновите хост, чтобы переименовать с помощью ИИ.",
         failedToCloseAgent: "Не удалось закрыть агента",
       },
       confirmations: {

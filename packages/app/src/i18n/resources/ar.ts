@@ -692,6 +692,7 @@ export const ar: TranslationResources = {
         reloadedAgent: "وكيل إعادة تحميل",
         failedToReloadAgent: "فشل في إعادة تحميل الوكيل",
         failedToRetitleAgent: "فشل في إعادة تسمية الوكيل",
+        updateHostToRetitleAgent: "حدّث المضيف لإعادة التسمية بالذكاء الاصطناعي.",
         failedToCloseAgent: "فشل في إغلاق الوكيل",
       },
       confirmations: {

@@ -473,6 +473,62 @@ test("Hub management requires daemon support before dispatching requests", async
   expect(mock.sent).toEqual([]);
 });
 
+test("agent retitle requires daemon support before dispatching requests", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "retitle_feature_gate_unit_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen();
+  await connecting;
+
+  await expect(client.retitleAgent("agent-1")).rejects.toThrow(
+    "Update the host to rename with AI.",
+  );
+  expect(mock.sent).toEqual([]);
+});
+
+test("agent retitle sends the sentinel label on a capable host", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "retitle_capable_host_unit_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: { agentRetitle: true } });
+  await connecting;
+
+  const pending = client.retitleAgent("agent-1");
+  const request = parseSentFrame(mock.sent[0]);
+  expect(request).toEqual(
+    expect.objectContaining({
+      type: "update_agent_request",
+      agentId: "agent-1",
+      labels: { "paseo.retitle": "1" },
+    }),
+  );
+
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "update_agent_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "agent-1",
+        accepted: true,
+        error: null,
+      },
+    }),
+  );
+  await pending;
+});
+
 test("timeline observation consumes broadcasts from a host without selective delivery", async () => {
   const mock = createMockTransport();
   const client = new DaemonClient({

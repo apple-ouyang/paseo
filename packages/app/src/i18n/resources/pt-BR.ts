@@ -697,6 +697,7 @@ export const ptBR: TranslationResources = {
         reloadedAgent: "Agente recarregado",
         failedToReloadAgent: "Falha ao recarregar agente",
         failedToRetitleAgent: "Falha ao renomear agente",
+        updateHostToRetitleAgent: "Atualize o host para renomear com IA.",
         failedToCloseAgent: "Falha ao fechar agente",
       },
       confirmations: {

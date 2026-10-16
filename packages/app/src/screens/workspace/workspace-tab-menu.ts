@@ -22,6 +22,11 @@ export interface WorkspaceTabMenuLabels {
   close: string;
 }
 
+// COMPAT(agentRetitle): added in v0.11.2, remove after 2027-04-16.
+export function isAgentRetitleSupported(features: { agentRetitle?: boolean } | undefined): boolean {
+  return features?.agentRetitle === true;
+}
+
 export const DEFAULT_WORKSPACE_TAB_MENU_LABELS: WorkspaceTabMenuLabels = {
   copyResumeCommand: i18n.t("workspace.tabs.menu.copyResumeCommand"),
   copyAgentId: i18n.t("workspace.tabs.menu.copyAgentId"),

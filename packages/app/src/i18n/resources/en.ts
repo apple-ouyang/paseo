@@ -689,6 +689,7 @@ export const en = {
         reloadedAgent: "Reloaded agent",
         failedToReloadAgent: "Failed to reload agent",
         failedToRetitleAgent: "Failed to rename agent",
+        updateHostToRetitleAgent: "Update the host to rename with AI.",
         failedToCloseAgent: "Failed to close agent",
       },
       confirmations: {

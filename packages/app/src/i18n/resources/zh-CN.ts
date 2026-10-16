@@ -692,6 +692,7 @@ export const zhCN: TranslationResources = {
         reloadedAgent: "已重新加载 Agent",
         failedToReloadAgent: "重新加载 Agent 失败",
         failedToRetitleAgent: "重命名 Agent 失败",
+        updateHostToRetitleAgent: "请更新 Host 以使用 AI 重命名。",
         failedToCloseAgent: "关闭 Agent 失败",
       },
       confirmations: {

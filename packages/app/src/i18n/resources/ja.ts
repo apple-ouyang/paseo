@@ -699,6 +699,7 @@ export const ja: TranslationResources = {
         reloadedAgent: "エージェントを再読み込みしました",
         failedToReloadAgent: "エージェントの再読み込みに失敗しました",
         failedToRetitleAgent: "エージェントの名前変更に失敗しました",
+        updateHostToRetitleAgent: "AI で名前を変更するにはホストを更新してください。",
         failedToCloseAgent: "エージェントを閉じられませんでした",
       },
       confirmations: {

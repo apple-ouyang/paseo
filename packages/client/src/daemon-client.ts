@@ -3026,6 +3026,14 @@ export class DaemonClient {
     }
   }
 
+  async retitleAgent(agentId: string): Promise<void> {
+    // COMPAT(agentRetitle): added in v0.11.2, remove after 2027-04-16.
+    if (this.lastServerInfoMessage?.features?.agentRetitle !== true) {
+      throw new Error("Update the host to rename with AI.");
+    }
+    await this.updateAgent(agentId, { labels: { "paseo.retitle": "1" } });
+  }
+
   async updateAgent(
     agentId: string,
     updates: { name?: string; labels?: Record<string, string> },

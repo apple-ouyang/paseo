@@ -3407,7 +3407,11 @@ export class Session {
     };
   }
 
-  private async retitleAgentFromUserPrompts(agentId: string, requestId: string): Promise<void> {
+  private async retitleAgentFromUserPrompts(input: {
+    agentId: string;
+    requestId: string;
+  }): Promise<void> {
+    const { agentId, requestId } = input;
     const respond = (accepted: boolean, error: string | null) =>
       this.emit({
         type: "update_agent_response" as const,
@@ -3431,7 +3435,7 @@ export class Session {
       }
       const stored = await this.agentStorage.get(agentId);
       const cwd = stored?.cwd ?? "";
-      respond(true, null);
+      const titleAtStart = stored?.title ?? null;
       let prompt = prompts.join("\n\n");
       if (prompt.length > RETITLE_PROMPT_MAX_CHARS) {
         prompt = `${prompt.slice(0, RETITLE_PROMPT_HEAD_CHARS)}\n\n[...]\n\n${prompt.slice(RETITLE_PROMPT_HEAD_CHARS - RETITLE_PROMPT_MAX_CHARS)}`;
@@ -3441,9 +3445,17 @@ export class Session {
         prompt,
         currentSelection: this.getFocusedAgentSelectionForCwd(cwd),
       });
-      if (title) {
-        await this.agentManager.setTitle(agentId, title);
+      if (!title) {
+        respond(false, "failed to generate title");
+        return;
       }
+      const current = await this.agentStorage.get(agentId);
+      if ((current?.title ?? null) !== titleAtStart) {
+        respond(false, "title changed during generation");
+        return;
+      }
+      await this.agentManager.setTitle(agentId, title);
+      respond(true, null);
     } catch (error) {
       this.sessionLogger.error({ err: error, agentId, requestId }, "session: agent retitle failed");
       respond(false, getErrorMessage(error));
@@ -3457,7 +3469,7 @@ export class Session {
     requestId: string,
   ): Promise<void> {
     if (name === undefined && labels?.["paseo.retitle"] === "1") {
-      await this.retitleAgentFromUserPrompts(agentId, requestId);
+      await this.retitleAgentFromUserPrompts({ agentId, requestId });
       return;
     }
     this.sessionLogger.info(

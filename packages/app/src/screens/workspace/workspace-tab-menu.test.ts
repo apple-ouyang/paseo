@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildWorkspaceDesktopTabActions,
   buildWorkspaceTabMenuEntries,
+  isAgentRetitleSupported,
 } from "@/screens/workspace/workspace-tab-menu";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
 
@@ -184,6 +185,13 @@ describe("buildWorkspaceTabMenuEntries", () => {
     renameEntry.onSelect();
 
     expect(onRenameTab).toHaveBeenCalledWith(tab);
+  });
+
+  it("treats agent retitle as unsupported until the host advertises it", () => {
+    expect(isAgentRetitleSupported(undefined)).toBe(false);
+    expect(isAgentRetitleSupported({})).toBe(false);
+    expect(isAgentRetitleSupported({ agentRetitle: false })).toBe(false);
+    expect(isAgentRetitleSupported({ agentRetitle: true })).toBe(true);
   });
 
   it("invokes onRetitleAgent with the agent id when the AI rename entry is selected", () => {

@@ -699,6 +699,7 @@ export const es: TranslationResources = {
         reloadedAgent: "Agente recargado",
         failedToReloadAgent: "No se pudo recargar el agente",
         failedToRetitleAgent: "No se pudo renombrar el agente",
+        updateHostToRetitleAgent: "Actualiza el host para renombrar con IA.",
         failedToCloseAgent: "No se pudo cerrar el agente",
       },
       confirmations: {

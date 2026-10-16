@@ -136,6 +136,7 @@ import {
 } from "@/screens/workspace/workspace-desktop-tabs-row";
 import { useDesktopBrowserNewTabRequests } from "@/desktop/browser/new-tab-requests";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
+import { isAgentRetitleSupported } from "@/screens/workspace/workspace-tab-menu";
 import {
   resolveWorkspaceExplorerToggleOwner,
   EXPLORER_TOGGLE_KEYS,
@@ -2235,18 +2236,27 @@ function WorkspaceScreenContent({
         toast.error(t("workspace.terminal.hostDisconnected"));
         return;
       }
+      // COMPAT(agentRetitle): added in v0.11.2, remove after 2027-04-16.
+      if (
+        !isAgentRetitleSupported(
+          useSessionStore.getState().sessions[normalizedServerId]?.serverInfo?.features,
+        )
+      ) {
+        toast.error(t("workspace.tabs.toasts.updateHostToRetitleAgent"));
+        return;
+      }
       // The daemon recognizes this label as "regenerate the title from the
       // latest user messages" and answers with the normal update_agent_response
       // plus an agent_update broadcast once the generated title lands.
       try {
-        await client.updateAgent(agentId, { labels: { "paseo.retitle": "1" } });
+        await client.retitleAgent(agentId);
       } catch (error) {
         toast.error(
           error instanceof Error ? error.message : t("workspace.tabs.toasts.failedToRetitleAgent"),
         );
       }
     },
-    [client, isConnected, toast, t],
+    [client, isConnected, normalizedServerId, toast, t],
   );
 
   const handleCopyWorkspacePath = useCallback(async () => {
