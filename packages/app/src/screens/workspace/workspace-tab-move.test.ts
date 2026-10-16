@@ -9,6 +9,7 @@ import {
   insertMoveToWorkspaceMenuEntry,
   listWorkspaceTabMoveTargets,
   mergePendingTabLabels,
+  remainingPendingTabLabels,
   moveWorkspaceTab,
   parseTabOrderLabel,
   decideSyncedClose,
@@ -595,5 +596,26 @@ describe("pending label merge", () => {
     expect(pendingTabLabelsSatisfied(pending, stored)).toBe(false);
     expect(pendingTabLabelsSatisfied({ closed: true }, { [TAB_CLOSED_LABEL]: "" })).toBe(false);
     expect(pendingTabLabelsSatisfied({ order: "000002" }, stored)).toBe(false);
+  });
+
+  it("drops a satisfied workspace from pending while order is still waiting", () => {
+    const pending = { workspaceId: "ws-b", closed: false, order: "000000" };
+    expect(
+      remainingPendingTabLabels(pending, {
+        [TAB_WORKSPACE_LABEL]: "ws-b",
+        [TAB_CLOSED_LABEL]: "",
+        [TAB_ORDER_LABEL]: "000005",
+      }),
+    ).toEqual({ order: "000000" });
+    expect(
+      mergePendingTabLabels(
+        {
+          [TAB_WORKSPACE_LABEL]: "ws-c",
+          [TAB_CLOSED_LABEL]: "",
+          [TAB_ORDER_LABEL]: "000005",
+        },
+        { order: "000000" },
+      )[TAB_WORKSPACE_LABEL],
+    ).toBe("ws-c");
   });
 });

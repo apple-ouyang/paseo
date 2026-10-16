@@ -3,7 +3,12 @@ import type { StateStorage } from "zustand/middleware";
 
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useSessionStore, type Agent } from "@/stores/session-store";
-import { collectAllTabs, createWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
+import {
+  collectAllPanes,
+  collectAllTabs,
+  createWorkspaceLayoutStore,
+  DEFAULT_PANE_ID,
+} from "@/stores/workspace-layout-store";
 import {
   moveAgentTabToWorkspace,
   setWorkspaceTabSyncClientResolver,
@@ -379,5 +384,125 @@ describe("workspace tab sync", () => {
     });
     expect(agentTabIdsIn("ws-a")).toEqual([]);
     expect(updateAgent).not.toHaveBeenCalled();
+  });
+
+  it("lets a newer remote move win after the earlier workspace echo lands", () => {
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000005",
+    });
+    echoWrites = false;
+    moveAgentTabToWorkspace({
+      serverId: SERVER,
+      sourceWorkspaceKey: workspaceKey("ws-a"),
+      targetWorkspaceKey: workspaceKey("ws-b"),
+      targetWorkspaceId: "ws-b",
+      agentId: "agent-1",
+      tabId: tabsIn("ws-a")[0]!.tabId,
+    });
+    expect(agentTabIdsIn("ws-b")).toEqual(["agent-1"]);
+    // Local order publish while the move echo is still in flight: order stays
+    // pending after workspace B lands, which used to keep B in the record.
+    layoutStore.setState({} as never);
+    vi.advanceTimersByTime(200);
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-b",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000005",
+    });
+    expect(agentTabIdsIn("ws-b")).toEqual(["agent-1"]);
+    // Another client then moves the tab to C. The echoed B must not return.
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-c",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000005",
+    });
+    expect(agentTabIdsIn("ws-c")).toEqual(["agent-1"]);
+    expect(agentTabIdsIn("ws-b")).toEqual([]);
+  });
+
+  it("keeps a local reorder when a remote label update lands during the publish delay", () => {
+    if (typeof document !== "undefined") {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    }
+    useSessionStore.getState().setAgents(
+      SERVER,
+      new Map([
+        ["agent-1", makeAgent("agent-1")],
+        ["agent-2", makeAgent("agent-2")],
+        ["agent-3", makeAgent("agent-3")],
+      ]),
+    );
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+      pin: true,
+    });
+    layoutStore.getState().openTab({
+      workspaceKey: workspaceKey("ws-a"),
+      target: { kind: "agent", agentId: "agent-2" },
+      intent: "reveal",
+      pin: true,
+    });
+    setAgentLabels("agent-1", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000000",
+    });
+    setAgentLabels("agent-2", {
+      [TAB_WORKSPACE_LABEL]: "ws-a",
+      [TAB_CLOSED_LABEL]: "",
+      [TAB_ORDER_LABEL]: "000001",
+    });
+    expect(agentTabIdsIn("ws-a")).toEqual(["agent-1", "agent-2"]);
+    updateAgent.mockClear();
+
+    const layout = layoutStore.getState().layoutByWorkspace[workspaceKey("ws-a")]!;
+    const tabsById = new Map(collectAllTabs(layout.root).map((tab) => [tab.tabId, tab]));
+    const pane = collectAllPanes(layout.root).find(
+      (candidate) => candidate.id === DEFAULT_PANE_ID,
+    )!;
+    const slots: number[] = [];
+    const agentTabIds: string[] = [];
+    pane.tabIds.forEach((tabId, index) => {
+      if (tabsById.get(tabId)?.target.kind === "agent") {
+        slots.push(index);
+        agentTabIds.push(tabId);
+      }
+    });
+    const next = [...pane.tabIds];
+    next[slots[0]!] = agentTabIds[1]!;
+    next[slots[1]!] = agentTabIds[0]!;
+    layoutStore.getState().reorderTabsInPane(workspaceKey("ws-a"), pane.id, next);
+    expect(agentTabIdsIn("ws-a")).toEqual(["agent-2", "agent-1"]);
+
+    // Unrelated remote echo during the 150 ms delay must not restore the old order.
+    setAgentLabels("agent-3", {
+      [TAB_WORKSPACE_LABEL]: "ws-other",
+      [TAB_CLOSED_LABEL]: "",
+    });
+    expect(agentTabIdsIn("ws-a")).toEqual(["agent-2", "agent-1"]);
+
+    vi.advanceTimersByTime(200);
+    expect(updateAgent).toHaveBeenCalledWith(
+      "agent-2",
+      expect.objectContaining({
+        labels: expect.objectContaining({ [TAB_ORDER_LABEL]: "000000" }),
+      }),
+    );
+    expect(updateAgent).toHaveBeenCalledWith(
+      "agent-1",
+      expect.objectContaining({
+        labels: expect.objectContaining({ [TAB_ORDER_LABEL]: "000001" }),
+      }),
+    );
   });
 });

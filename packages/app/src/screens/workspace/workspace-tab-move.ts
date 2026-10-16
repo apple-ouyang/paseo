@@ -86,6 +86,31 @@ export function mergePendingTabLabels(
 }
 
 /**
+ * Drop each pending field whose echo has already landed. Remaining keys stay
+ * live; a satisfied workspace must not overlay a later remote move just
+ * because order is still waiting.
+ */
+export function remainingPendingTabLabels(
+  pending: PendingTabLabels,
+  labels: Record<string, string> | null | undefined,
+): PendingTabLabels {
+  const remaining: PendingTabLabels = {};
+  if (
+    pending.workspaceId !== undefined &&
+    (labels?.[TAB_WORKSPACE_LABEL] ?? "") !== pending.workspaceId
+  ) {
+    remaining.workspaceId = pending.workspaceId;
+  }
+  if (pending.closed !== undefined && Boolean(labels?.[TAB_CLOSED_LABEL]) !== pending.closed) {
+    remaining.closed = pending.closed;
+  }
+  if (pending.order !== undefined && (labels?.[TAB_ORDER_LABEL] ?? "") !== pending.order) {
+    remaining.order = pending.order;
+  }
+  return remaining;
+}
+
+/**
  * A pending write can be retired once the echoed labels carry every key it
  * wrote. Until then the stored copy may still hold the pre-gesture value.
  */
@@ -93,19 +118,12 @@ export function pendingTabLabelsSatisfied(
   pending: PendingTabLabels,
   labels: Record<string, string> | null | undefined,
 ): boolean {
-  if (
-    pending.workspaceId !== undefined &&
-    (labels?.[TAB_WORKSPACE_LABEL] ?? "") !== pending.workspaceId
-  ) {
-    return false;
-  }
-  if (pending.closed !== undefined && Boolean(labels?.[TAB_CLOSED_LABEL]) !== pending.closed) {
-    return false;
-  }
-  if (pending.order !== undefined && (labels?.[TAB_ORDER_LABEL] ?? "") !== pending.order) {
-    return false;
-  }
-  return true;
+  const remaining = remainingPendingTabLabels(pending, labels);
+  return (
+    remaining.workspaceId === undefined &&
+    remaining.closed === undefined &&
+    remaining.order === undefined
+  );
 }
 
 export function formatTabOrderLabel(index: number): string {

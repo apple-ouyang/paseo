@@ -13,6 +13,7 @@ import {
   moveWorkspaceTab,
   planTabOrderEnforcement,
   planTabWorkspaceEnforcement,
+  remainingPendingTabLabels,
   TAB_CLOSED_LABEL,
   TAB_ORDER_LABEL,
   TAB_WORKSPACE_LABEL,
@@ -40,10 +41,12 @@ import {
  *   missed edges and hook retries.
  *
  * Echo discipline keeps gestures from bouncing: every local label write is
- * remembered in `pendingLabels` and merged over the stored labels until the
- * daemon echo lands (or 15s elapse), and the sweep never writes a
- * workspace/closed/order value that disagrees with the label — a client that
- * has not converged yet must not stomp another client's in-flight change.
+ * remembered in `pendingLabels` and merged over the stored labels until that
+ * field's daemon echo lands (or 15s elapse). Each field is dropped on its own
+ * echo so a satisfied workspace cannot overlay a newer remote move while
+ * order is still waiting. The sweep never writes a workspace/closed/order
+ * value that disagrees with the label — a client that has not converged yet
+ * must not stomp another client's in-flight change.
  *
  * Vanilla clients (without this engine) simply ignore the labels: their
  * open/close stays local and is not synced.
@@ -96,29 +99,37 @@ function livePendingFields(
   pending: PendingTabLabelWrite,
   stored: Record<string, string> | null,
 ): PendingTabLabels {
-  const live: PendingTabLabels = {};
-  if (
-    pending.workspaceId &&
-    pending.workspaceId.value !== stored?.[TAB_WORKSPACE_LABEL] &&
-    Date.now() - pending.workspaceId.at <= PENDING_LABEL_TTL_MS
-  ) {
-    live.workspaceId = pending.workspaceId.value;
+  const unexpired: PendingTabLabels = {};
+  if (pending.workspaceId && Date.now() - pending.workspaceId.at <= PENDING_LABEL_TTL_MS) {
+    unexpired.workspaceId = pending.workspaceId.value;
   }
-  if (
-    pending.closed !== undefined &&
-    Boolean(stored?.[TAB_CLOSED_LABEL]) !== pending.closed.value &&
-    Date.now() - pending.closed.at <= PENDING_LABEL_TTL_MS
-  ) {
-    live.closed = pending.closed.value;
+  if (pending.closed && Date.now() - pending.closed.at <= PENDING_LABEL_TTL_MS) {
+    unexpired.closed = pending.closed.value;
   }
-  if (
-    pending.order !== undefined &&
-    pending.order.value !== stored?.[TAB_ORDER_LABEL] &&
-    Date.now() - pending.order.at <= PENDING_LABEL_TTL_MS
-  ) {
-    live.order = pending.order.value;
+  if (pending.order && Date.now() - pending.order.at <= PENDING_LABEL_TTL_MS) {
+    unexpired.order = pending.order.value;
   }
-  return live;
+  return remainingPendingTabLabels(unexpired, stored);
+}
+
+function retainLivePendingWrite(
+  pending: PendingTabLabelWrite,
+  live: PendingTabLabels,
+): PendingTabLabelWrite | null {
+  const next: PendingTabLabelWrite = {};
+  if (live.workspaceId !== undefined && pending.workspaceId) {
+    next.workspaceId = pending.workspaceId;
+  }
+  if (live.closed !== undefined && pending.closed) {
+    next.closed = pending.closed;
+  }
+  if (live.order !== undefined && pending.order) {
+    next.order = pending.order;
+  }
+  if (next.workspaceId === undefined && next.closed === undefined && next.order === undefined) {
+    return null;
+  }
+  return next;
 }
 
 function agentLabelsFor(serverId: string, agentId: string): Record<string, string> | null {
@@ -135,10 +146,15 @@ function effectiveLabels(serverId: string, agentId: string): Record<string, stri
     return current ?? {};
   }
   const live = livePendingFields(pending, current);
-  if (live.workspaceId === undefined && live.closed === undefined && live.order === undefined) {
+  const retained = retainLivePendingWrite(pending, live);
+  if (!retained) {
     pendingLabels.delete(key);
     return current ?? {};
   }
+  // Drop each satisfied/expired field now. Keeping a workspace that already
+  // echoed would overlay it again if another client moves the tab while a
+  // different field (order) is still waiting.
+  pendingLabels.set(key, retained);
   return mergePendingTabLabels(current, live);
 }
 
@@ -427,7 +443,13 @@ function broadcastAgentTab(input: {
     writeAgentLabels(serverId, agentId, buildTabWorkspaceLabels(effective, workspaceId, rank));
     return;
   }
-  if (!publishLocal || labeledWorkspaceId !== workspaceId || effective[TAB_ORDER_LABEL] === order) {
+  if (!publishLocal || labeledWorkspaceId !== workspaceId) {
+    return;
+  }
+  // Compare against the stored order, not the pending-merged view: a local
+  // drag is marked pending before the debounced write, so `effective` already
+  // matches the new rank and must not skip the publish.
+  if (agentLabelsFor(serverId, agentId)?.[TAB_ORDER_LABEL] === order) {
     return;
   }
   // Placement converged: write back only the order drift, marking it pending
@@ -436,7 +458,10 @@ function broadcastAgentTab(input: {
   writeAgentLabels(serverId, agentId, { ...effective, [TAB_ORDER_LABEL]: order });
 }
 
-function broadcastServerTabs(serverId: string, publishLocal: boolean): void {
+function visitServerAgentTabs(
+  serverId: string,
+  visit: (input: { workspaceId: string; agentId: string; rank: number }) => void,
+): void {
   const session = useSessionStore.getState().sessions[serverId];
   const agentById = new Map<string, Agent>([
     ...(session?.agentDetails?.entries() ?? []),
@@ -458,12 +483,10 @@ function broadcastServerTabs(serverId: string, publishLocal: boolean): void {
         }
         const agent = agentById.get(tab.target.agentId);
         if (agent) {
-          broadcastAgentTab({
-            serverId,
+          visit({
             workspaceId,
             agentId: agent.id || tab.target.agentId,
             rank,
-            publishLocal,
           });
           rank += 1;
         }
@@ -472,9 +495,46 @@ function broadcastServerTabs(serverId: string, publishLocal: boolean): void {
   }
 }
 
+function isFocusedWindow(): boolean {
+  if (typeof document === "undefined" || typeof document.hasFocus !== "function") {
+    return true;
+  }
+  return document.hasFocus();
+}
+
+/** Pin the current local ranks before the delayed write, so a remote echo
+ * that lands in the debounce window cannot restore the old order. */
+function rememberLocalTabOrder(): void {
+  if (!isFocusedWindow()) {
+    return;
+  }
+  for (const serverId of Object.keys(useSessionStore.getState().sessions)) {
+    visitServerAgentTabs(serverId, ({ workspaceId, agentId, rank }) => {
+      const order = formatTabOrderLabel(rank);
+      const effective = effectiveLabels(serverId, agentId);
+      if (effective[TAB_WORKSPACE_LABEL] !== workspaceId || effective[TAB_ORDER_LABEL] === order) {
+        return;
+      }
+      markPending(serverId, agentId, { order });
+    });
+  }
+}
+
+function broadcastServerTabs(serverId: string, publishLocal: boolean): void {
+  visitServerAgentTabs(serverId, ({ workspaceId, agentId, rank }) => {
+    broadcastAgentTab({
+      serverId,
+      workspaceId,
+      agentId,
+      rank,
+      publishLocal,
+    });
+  });
+}
+
 function broadcastTabs(publishLocal: boolean): void {
   try {
-    if (typeof document !== "undefined" && !document.hasFocus()) {
+    if (!isFocusedWindow()) {
       return;
     }
     for (const serverId of Object.keys(useSessionStore.getState().sessions)) {
@@ -725,9 +785,10 @@ function installSessionWatch(): void {
 /**
  * Local layout is the order authority on the focused window: a user drag or a
  * freshly appearing unlabeled tab publishes its labels immediately, debounced
- * and skipped while the enforcer itself is mutating the layout. Publishing
- * runs before converging — the reverse order let the enforcer yank a fresh
- * drag back to the stale label order before the broadcast ever ran.
+ * and skipped while the enforcer itself is mutating the layout. The local
+ * order is marked pending at the layout change, before the delayed write, so a
+ * remote label echo that lands in the debounce window cannot restore the old
+ * order and swallow the drag. Publishing still runs before converging.
  */
 let layoutPublishTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -738,8 +799,12 @@ function installLayoutWatch(): void {
   try {
     activeWorkspaceLayoutStore.subscribe(() => {
       try {
-        if (internalSync || layoutPublishTimer) {
+        if (internalSync) {
           return;
+        }
+        rememberLocalTabOrder();
+        if (layoutPublishTimer) {
+          clearTimeout(layoutPublishTimer);
         }
         layoutPublishTimer = setTimeout(() => {
           layoutPublishTimer = null;
