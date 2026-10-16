@@ -128,6 +128,30 @@ describe("planDaemonFileSearchRequest", () => {
     });
   });
 
+  it("keeps a home prefix that parent segments cannot pop", () => {
+    // `~/../other` is not `other`: the daemon has to expand `~` before walking to the parent.
+    expect(
+      planDaemonFileSearchRequest({
+        query: "~/../other/plan.md",
+        workspaceRoot: "/code/app",
+      }),
+    ).toEqual({
+      list: { cwd: "~/../other", query: "plan.md", root: "~/../other" },
+      exact: { cwd: "~/../other", query: "./plan.md", root: "~/../other" },
+      namedPath: "~/../other/plan.md",
+    });
+    expect(planDaemonFileSearchRequest({ query: "~/foo/../bar" })).toEqual({
+      list: { cwd: "~", query: "bar", root: "~" },
+      exact: { cwd: "~", query: "./bar", root: "~" },
+      namedPath: "~/bar",
+    });
+    expect(planDaemonFileSearchRequest({ query: "~/.." })).toEqual({
+      list: { cwd: "~", query: "..", root: "~" },
+      exact: { cwd: "~", query: "./..", root: "~" },
+      namedPath: "~/..",
+    });
+  });
+
   it("normalizes Windows separators and keeps a drive root a root", () => {
     expect(
       planDaemonFileSearchRequest({
