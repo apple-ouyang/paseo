@@ -57,11 +57,16 @@ const SWEEP_INTERVAL_MS = 30_000;
 const LAYOUT_PUBLISH_DEBOUNCE_MS = 150;
 
 /** Each written field ages on its own clock: a fresh order publish must not
- * extend the suppression window of an earlier workspace/closed intent. */
+ * extend the suppression window of an earlier workspace/closed intent.
+ * `inFlightOrders` is the FIFO of order values this client wrote that have
+ * not yet been observed in the stored labels, so an undo can keep overlaying
+ * and republishing while an older write is still echoing. */
 interface PendingTabLabelWrite {
   workspaceId?: { value: string; at: number };
   closed?: { value: boolean; at: number };
   order?: { value: string; at: number };
+  inFlightOrders?: string[];
+  lastSeenStoredOrder?: string;
 }
 
 let internalSync = false;
@@ -94,6 +99,41 @@ function markPending(serverId: string, agentId: string, patch: PendingTabLabels)
   pendingLabels.set(key, next);
 }
 
+function trackInFlightOrder(serverId: string, agentId: string, order: string): void {
+  const key = pendingKey(serverId, agentId);
+  const next = { ...pendingLabels.get(key) };
+  next.inFlightOrders = [...(next.inFlightOrders ?? []), order];
+  pendingLabels.set(key, next);
+}
+
+function acknowledgeOrderEcho(
+  pending: PendingTabLabelWrite,
+  stored: Record<string, string> | null,
+): PendingTabLabelWrite {
+  const storedOrder = stored?.[TAB_ORDER_LABEL] ?? "";
+  const lastSeen = pending.lastSeenStoredOrder ?? "";
+  if (storedOrder === lastSeen) {
+    return pending;
+  }
+  const inFlightOrders = [...(pending.inFlightOrders ?? [])];
+  const idx = inFlightOrders.indexOf(storedOrder);
+  if (idx >= 0) {
+    inFlightOrders.splice(idx, 1);
+  }
+  return {
+    ...pending,
+    inFlightOrders,
+    lastSeenStoredOrder: storedOrder,
+  };
+}
+
+function olderOrderWriteInFlight(
+  pending: PendingTabLabelWrite | undefined,
+  order: string,
+): boolean {
+  return (pending?.inFlightOrders ?? []).some((value) => value !== order);
+}
+
 /** Pending values that are neither satisfied nor expired, as plain labels. */
 function livePendingFields(
   pending: PendingTabLabelWrite,
@@ -109,7 +149,17 @@ function livePendingFields(
   if (pending.order && Date.now() - pending.order.at <= PENDING_LABEL_TTL_MS) {
     unexpired.order = pending.order.value;
   }
-  return remainingPendingTabLabels(unexpired, stored);
+  const remaining = remainingPendingTabLabels(unexpired, stored);
+  // An undone order can match the stored labels while an older write is still
+  // in flight. Keep overlaying it so that echo cannot restore the undone rank.
+  if (
+    remaining.order === undefined &&
+    unexpired.order !== undefined &&
+    olderOrderWriteInFlight(pending, unexpired.order)
+  ) {
+    remaining.order = unexpired.order;
+  }
+  return remaining;
 }
 
 function retainLivePendingWrite(
@@ -126,9 +176,21 @@ function retainLivePendingWrite(
   if (live.order !== undefined && pending.order) {
     next.order = pending.order;
   }
-  if (next.workspaceId === undefined && next.closed === undefined && next.order === undefined) {
+  const orderUnexpired =
+    pending.order !== undefined && Date.now() - pending.order.at <= PENDING_LABEL_TTL_MS;
+  if (orderUnexpired && pending.inFlightOrders?.length) {
+    next.inFlightOrders = [...pending.inFlightOrders];
+    next.order = pending.order;
+  }
+  if (
+    next.workspaceId === undefined &&
+    next.closed === undefined &&
+    next.order === undefined &&
+    !next.inFlightOrders?.length
+  ) {
     return null;
   }
+  next.lastSeenStoredOrder = pending.lastSeenStoredOrder;
   return next;
 }
 
@@ -145,15 +207,18 @@ function effectiveLabels(serverId: string, agentId: string): Record<string, stri
   if (!pending) {
     return current ?? {};
   }
-  const live = livePendingFields(pending, current);
-  const retained = retainLivePendingWrite(pending, live);
+  const acknowledged = acknowledgeOrderEcho(pending, current);
+  const live = livePendingFields(acknowledged, current);
+  const retained = retainLivePendingWrite(acknowledged, live);
   if (!retained) {
     pendingLabels.delete(key);
     return current ?? {};
   }
   // Drop each satisfied/expired field now. Keeping a workspace that already
   // echoed would overlay it again if another client moves the tab while a
-  // different field (order) is still waiting.
+  // different field (order) is still waiting. In-flight order writes stay
+  // until their echo is observed, so an undo is not dropped just because it
+  // matches the pre-echo stored labels.
   pendingLabels.set(key, retained);
   return mergePendingTabLabels(current, live);
 }
@@ -440,6 +505,7 @@ function broadcastAgentTab(input: {
   if (!labeledWorkspaceId) {
     // Never synced: adopt the tab under the focused window's layout.
     markPending(serverId, agentId, { workspaceId, closed: false, order });
+    trackInFlightOrder(serverId, agentId, order);
     writeAgentLabels(serverId, agentId, buildTabWorkspaceLabels(effective, workspaceId, rank));
     return;
   }
@@ -448,13 +514,19 @@ function broadcastAgentTab(input: {
   }
   // Compare against the stored order, not the pending-merged view: a local
   // drag is marked pending before the debounced write, so `effective` already
-  // matches the new rank and must not skip the publish.
-  if (agentLabelsFor(serverId, agentId)?.[TAB_ORDER_LABEL] === order) {
+  // matches the new rank and must not skip the publish. An undo that matches
+  // the stored order still has to write if an older order write is in flight.
+  const storedOrder = agentLabelsFor(serverId, agentId)?.[TAB_ORDER_LABEL];
+  if (
+    storedOrder === order &&
+    !olderOrderWriteInFlight(pendingLabels.get(pendingKey(serverId, agentId)), order)
+  ) {
     return;
   }
   // Placement converged: write back only the order drift, marking it pending
   // so the enforcer cannot yank a fresh drag back to the stale label order.
   markPending(serverId, agentId, { order });
+  trackInFlightOrder(serverId, agentId, order);
   writeAgentLabels(serverId, agentId, { ...effective, [TAB_ORDER_LABEL]: order });
 }
 
