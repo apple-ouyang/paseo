@@ -615,6 +615,11 @@ class ACPImportHistoryCollector {
   }
 }
 
+interface LinkedTerminalResult {
+  output: string;
+  exitCode: number | null;
+}
+
 export interface ACPToolSnapshot {
   toolCallId: string;
   title: string;
@@ -624,6 +629,7 @@ export interface ACPToolSnapshot {
   locations?: ToolCallLocation[] | null;
   rawInput?: unknown;
   rawOutput?: unknown;
+  terminalResult?: LinkedTerminalResult;
 }
 
 interface PendingPermission {
@@ -3186,6 +3192,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (this.toolSnapshotTransformer) {
       snapshot = this.toolSnapshotTransformer(snapshot);
     }
+    snapshot = captureLinkedTerminalResult(
+      snapshot,
+      this.terminalEntries,
+      this.releasedTerminalResults,
+    );
     this.toolCalls.set(toolCallId, snapshot);
     return [
       this.wrapTimeline(
@@ -3896,7 +3907,7 @@ function coalesceDefined<T>(next: T | undefined, previous: T | undefined, fallba
  */
 function extractTerminalExitContent(
   update: ToolCall | ToolCallUpdate,
-): ToolCallContent | undefined {
+): Extract<ToolCallContent, { type: "terminal" }> | undefined {
   const meta = readRecord(update._meta);
   const exit = readRecord(meta?.terminal_exit);
   const terminalId = readString(exit, ["terminal_id"]);
@@ -3921,11 +3932,12 @@ function mergeToolSnapshot(
     locations: coalesceDefined(update.locations, previous?.locations, null),
     rawInput: update.rawInput !== undefined ? update.rawInput : previous?.rawInput,
     rawOutput: update.rawOutput !== undefined ? update.rawOutput : previous?.rawOutput,
+    terminalResult: previous?.terminalResult,
   };
 }
 
 function mergeToolContent(
-  content: ToolCallContent[] | undefined,
+  content: ToolCallContent[] | null | undefined,
   previousContent: ToolCallContent[] | null | undefined,
   terminalContent: ToolCallContent | undefined,
 ): ToolCallContent[] | null {
@@ -4024,7 +4036,7 @@ function mapToolDetail(
     firstLocation: snapshot.locations?.[0]?.path,
     textContent: extractToolText(snapshot.content),
     diffContent: extractDiffContent(snapshot.content),
-    terminalContent: extractTerminalContent(snapshot.content, terminals, releasedTerminalResults),
+    terminalContent: extractTerminalContent(snapshot, terminals, releasedTerminalResults),
     rawInput: readRecord(snapshot.rawInput),
     rawOutput: readRecord(snapshot.rawOutput),
   };
@@ -4173,8 +4185,20 @@ function extractDiffContent(
   return diff ? { oldText: diff.oldText ?? undefined, newText: diff.newText } : null;
 }
 
+function captureLinkedTerminalResult(
+  snapshot: ACPToolSnapshot,
+  terminals: Map<string, TerminalEntry>,
+  releasedTerminalResults: Map<string, TerminalResult>,
+): ACPToolSnapshot {
+  const liveResult = lookupLinkedTerminalResult(snapshot, terminals, releasedTerminalResults);
+  if (!liveResult) {
+    return snapshot;
+  }
+  return { ...snapshot, terminalResult: liveResult };
+}
+
 function extractTerminalContent(
-  content: ToolCallContent[] | null | undefined,
+  snapshot: ACPToolSnapshot,
   terminals: Map<string, TerminalEntry>,
   releasedTerminalResults: Map<string, TerminalResult>,
 ):
@@ -4185,7 +4209,18 @@ function extractTerminalContent(
       exitCode?: number | null;
     }
   | undefined {
-  const terminal = content?.find(
+  return (
+    lookupLinkedTerminalResult(snapshot, terminals, releasedTerminalResults) ??
+    snapshot.terminalResult
+  );
+}
+
+function lookupLinkedTerminalResult(
+  snapshot: ACPToolSnapshot,
+  terminals: Map<string, TerminalEntry>,
+  releasedTerminalResults: Map<string, TerminalResult>,
+): LinkedTerminalResult | undefined {
+  const terminal = snapshot.content?.find(
     (item): item is Extract<ToolCallContent, { type: "terminal" }> => item.type === "terminal",
   );
   if (!terminal) {

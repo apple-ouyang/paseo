@@ -1,6 +1,6 @@
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1004,6 +1004,14 @@ describe("ACP tool-call detail mapping", () => {
         content: [{ type: "content", content: { type: "text", text: "late update" } }],
       } as SessionUpdate,
     });
+    await session.sessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+      } as SessionUpdate,
+    });
 
     expect(items.at(-1)).toMatchObject({
       type: "tool_call",
@@ -1034,7 +1042,7 @@ describe("ACP tool-call detail mapping", () => {
     await expect(unhandledRejection).resolves.toBeUndefined();
   });
 
-  test("cleans released terminal results after failed tool calls", async () => {
+  test("keeps failed command output after released-terminal cleanup", async () => {
     const child = createTerminalChildStub();
     const session = await createInitializedSession({
       provider: "devin",
@@ -1087,8 +1095,10 @@ describe("ACP tool-call detail mapping", () => {
         status: "failed",
       } as SessionUpdate,
     });
-    expect(items.at(-1)).toMatchObject({ status: "failed", detail: { type: "shell" } });
-    expect((items.at(-1) as { detail: { output?: string } }).detail.output).toBeUndefined();
+    expect(items.at(-1)).toMatchObject({
+      status: "failed",
+      detail: { type: "shell", output: "failed-output\n", exitCode: 1 },
+    });
     await session.close();
   });
 
