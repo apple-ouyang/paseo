@@ -1011,28 +1011,38 @@ describe("ACP conversation rewind", () => {
     expect(loadSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-2" }));
   });
 
-  test("sends the client message id in prompt _meta only for rewind-capable agents", async () => {
-    for (const advertised of [false, true]) {
-      const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
-      const { session } = await createPublicRewindSession({
-        agentCapabilities: advertised ? rewindCapability : {},
-        connection: { prompt },
-      });
+  async function startTurnWithClientMessageId(
+    agentCapabilities: AgentCapabilities,
+  ): Promise<Record<string, unknown>> {
+    const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+    const { session } = await createPublicRewindSession({
+      agentCapabilities,
+      connection: { prompt },
+    });
+    await session.startTurn("hello", { clientMessageId: "client-1" });
+    return prompt.mock.calls[0]?.[0] as Record<string, unknown>;
+  }
 
-      await session.startTurn("hello", { clientMessageId: "client-1" });
+  test("sends the client message id in prompt _meta for rewind-capable agents", async () => {
+    const sent = await startTurnWithClientMessageId(rewindCapability);
 
-      const sent = prompt.mock.calls[0]?.[0] as Record<string, unknown>;
-      expect(sent).toMatchObject({
-        sessionId: "session-1",
-        messageId: "client-1",
-        prompt: [{ type: "text", text: "hello" }],
-      });
-      if (advertised) {
-        expect(sent._meta).toEqual({ clientMessageId: "client-1" });
-      } else {
-        expect(sent).not.toHaveProperty("_meta");
-      }
-    }
+    expect(sent).toMatchObject({
+      sessionId: "session-1",
+      messageId: "client-1",
+      prompt: [{ type: "text", text: "hello" }],
+    });
+    expect(sent._meta).toEqual({ clientMessageId: "client-1" });
+  });
+
+  test("omits prompt _meta when the agent does not advertise rewind", async () => {
+    const sent = await startTurnWithClientMessageId({});
+
+    expect(sent).toMatchObject({
+      sessionId: "session-1",
+      messageId: "client-1",
+      prompt: [{ type: "text", text: "hello" }],
+    });
+    expect(sent).not.toHaveProperty("_meta");
   });
 });
 
