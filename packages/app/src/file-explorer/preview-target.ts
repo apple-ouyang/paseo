@@ -1,8 +1,28 @@
-import { isAbsolutePath, isHomeRelativePath, isPathWithinRoot } from "@/utils/path";
+import {
+  collapsePathSegments,
+  isAbsolutePath,
+  isHomeRelativePath,
+  isPathWithinRoot,
+} from "@/utils/path";
 
 export interface FilePreviewReadTarget {
   cwd: string;
   path: string;
+}
+
+/**
+ * File reads are scoped to `cwd`. Home-relative paths that still contain `..` after collapse
+ * resolve outside `$HOME`, so the read root has to be the directory that contains the file.
+ */
+function homePreviewCwd(normalized: string): string {
+  const collapsed = collapsePathSegments(normalized);
+  const browsed = collapsed.replace(/\/+$/, "");
+  if (browsed !== "~/.." && !browsed.startsWith("~/../")) {
+    return "~";
+  }
+  const separator = browsed.lastIndexOf("/");
+  const parent = separator > 0 ? browsed.slice(0, separator) : browsed;
+  return parent === "~" ? browsed : parent;
 }
 
 function deriveFilesystemRootFromAbsolutePath(value: string): string | null {
@@ -34,7 +54,7 @@ export function resolveFilePreviewReadTarget(input: {
 
   if (isHomeRelativePath(previewPath)) {
     return {
-      cwd: "~",
+      cwd: homePreviewCwd(previewPath.replace(/\\/g, "/")),
       path: previewPath,
     };
   }
