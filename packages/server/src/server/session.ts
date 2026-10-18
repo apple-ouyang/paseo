@@ -2326,7 +2326,7 @@ export class Session {
       this.dispatchAgentRelationshipMessage(msg) ??
       this.dispatchAgentTimelineMessage(msg, source) ??
       this.dispatchHubExecutionMessage(msg) ??
-      this.dispatchCreationMessage(msg, source) ??
+      this.dispatchCreationOrPromptQueueMessage(msg, source) ??
       this.dispatchAgentLifecycleMessage(msg) ??
       this.dispatchAgentConfigMessage(msg) ??
       this.dispatchCheckoutMessage(msg) ??
@@ -2743,6 +2743,18 @@ export class Session {
       default:
         return undefined;
     }
+  }
+
+  private dispatchCreationOrPromptQueueMessage(
+    msg: SessionInboundMessage,
+    source?: object,
+  ): Promise<void> | undefined {
+    return this.dispatchCreationMessage(msg, source) ?? this.dispatchPromptQueueMessage(msg);
+  }
+
+  private dispatchPromptQueueMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type !== "agent.prompt_queue.remove.request") return undefined;
+    return this.handleRemoveQueuedPrompt(msg);
   }
 
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
@@ -8167,6 +8179,36 @@ export class Session {
     }
   }
 
+  private async handleRemoveQueuedPrompt(
+    msg: Extract<SessionInboundMessage, { type: "agent.prompt_queue.remove.request" }>,
+  ): Promise<void> {
+    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    if (!resolved.ok) {
+      this.emit({
+        type: "agent.prompt_queue.remove.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId: msg.agentId,
+          removed: false,
+          text: null,
+          error: resolved.error,
+        },
+      });
+      return;
+    }
+    const removed = this.agentManager.removeHostPrompt(resolved.agentId, msg.messageId);
+    this.emit({
+      type: "agent.prompt_queue.remove.response",
+      payload: {
+        requestId: msg.requestId,
+        agentId: resolved.agentId,
+        removed: removed !== null,
+        text: removed?.text ?? null,
+        error: null,
+      },
+    });
+  }
+
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ): Promise<void> {
@@ -8197,6 +8239,7 @@ export class Session {
         },
         "agent.session.send_agent_message",
       );
+      let queued = false;
       const send = async () => {
         const result = await sendPromptToAgent({
           agentManager: this.agentManager,
@@ -8207,10 +8250,12 @@ export class Session {
             ? { kind: "agent-message", agentId: msg.sourceAgentId }
             : undefined,
           messageId: msg.messageId,
+          queueText: msg.text,
           activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
           clearPendingPermissions: true,
           logger: this.sessionLogger,
         });
+        queued = result.disposition === "queued";
         if (result.disposition === "turn_started") {
           await waitForAgentRunStartWithTimeout(
             this.agentManager,
@@ -8244,6 +8289,7 @@ export class Session {
           agentId,
           accepted: true,
           error: null,
+          ...(queued ? { queued: true } : {}),
         },
       });
     } catch (error) {
