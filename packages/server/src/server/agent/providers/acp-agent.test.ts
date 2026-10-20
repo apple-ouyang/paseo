@@ -4370,8 +4370,12 @@ describe("ACP abandoned foreground turn", () => {
   });
 
   test("rejects when the provider process cannot be stopped", async () => {
+    let attempts = 0;
     const session = makeDownturnSession({
-      terminator: async () => "kill-timeout",
+      terminator: async () => {
+        attempts += 1;
+        return attempts === 1 ? "kill-timeout" : "terminated";
+      },
     }).session;
     await session.initializeResumedSession();
     await session.startTurn("first");
@@ -4380,6 +4384,9 @@ describe("ACP abandoned foreground turn", () => {
       "the provider process did not exit",
     );
     expect(asInternals<ACPSessionInternals>(session).activeForegroundTurnId).toBeNull();
+    // The process is still alive and nothing else holds it: close() must be able to retry.
+    await expect(session.close()).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
   });
 
   test("is a no-op on a session that has no id yet", async () => {

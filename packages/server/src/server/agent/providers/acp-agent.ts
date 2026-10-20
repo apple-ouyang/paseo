@@ -2618,6 +2618,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
     const results = await Promise.all(terminations);
     if (results.includes("kill-timeout")) {
+      // Keep the child registered so close() can retry; a cleared handle loses the only reference
+      // to a process that is still running.
+      this.child = child;
+      this.connection = null;
       throw new Error("ACP abandoned turn: the provider process did not exit");
     }
   }
