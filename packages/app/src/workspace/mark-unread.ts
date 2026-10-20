@@ -5,8 +5,6 @@ import { findPaneById, useWorkspaceLayoutStore } from "@/stores/workspace-layout
 /** Magic label consumed by the daemon `update_agent_request` interceptor. */
 export const MARK_AGENT_UNREAD_LABEL = "paseo.markUnread";
 
-export type AgentTabAttentionAction = "unread" | "read";
-
 interface AgentTabAttentionSnapshot {
   status?: string | null;
   requiresAttention?: boolean | null;
@@ -15,28 +13,24 @@ interface AgentTabAttentionSnapshot {
   archivedAt?: Date | string | null;
 }
 
-export function resolveAgentTabAttentionAction(
+export function canMarkAgentTabUnread(
   agent: AgentTabAttentionSnapshot | null | undefined,
-): AgentTabAttentionAction | null {
+): boolean {
   if (!agent || agent.archivedAt) {
-    return null;
+    return false;
   }
   const pending = agent.pendingPermissions;
-  const pendingCount =
-    pending == null ? 0 : "length" in pending ? pending.length : pending.size;
+  let pendingCount = 0;
+  if (pending != null) {
+    pendingCount = "length" in pending ? pending.length : pending.size;
+  }
   if (pendingCount > 0) {
-    return null;
+    return false;
   }
   if (agent.requiresAttention === true) {
-    if (agent.attentionReason === "finished" || agent.attentionReason === "error") {
-      return "read";
-    }
-    return null;
+    return agent.attentionReason === "finished" || agent.attentionReason === "error";
   }
-  if (agent.status === "idle" || agent.status === "closed") {
-    return "unread";
-  }
-  return null;
+  return agent.status === "idle" || agent.status === "closed";
 }
 
 export async function markAgentTabUnread(input: {
@@ -67,14 +61,6 @@ export async function markAgentTabUnread(input: {
     }
     throw error;
   }
-}
-
-export async function markAgentTabRead(serverId: string, agentId: string): Promise<void> {
-  const client = getHostRuntimeStore().getClient(serverId);
-  if (!client) {
-    throw new Error(i18n.t("workspace.terminal.hostDisconnected"));
-  }
-  await client.clearAgentAttention(agentId);
 }
 
 export async function markWorkspaceUnread(serverId: string, workspaceId: string): Promise<void> {

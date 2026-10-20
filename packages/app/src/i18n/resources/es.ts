@@ -654,7 +654,6 @@ export const es: TranslationResources = {
         reloadAgentTooltip:
           "Vuelva a cargar el agente para actualizar habilidades, MCP o estado de inicio de sesión.",
         markAsUnread: "Marcar como no leído",
-        markAsRead: "Marcar como leído",
         close: "Cerrar",
         renameTerminal: "Cambiar nombre de terminal",
         renameAgent: "Cambiar nombre del agente",

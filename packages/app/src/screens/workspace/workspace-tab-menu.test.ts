@@ -385,7 +385,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
       onCloseTabsBefore: vi.fn(),
       onCloseTabsAfter: vi.fn(),
       onCloseOtherTabs: vi.fn(),
-      attentionAction: "unread",
+      canMarkUnread: true,
       onMarkUnread,
     });
 
@@ -402,12 +402,10 @@ describe("buildWorkspaceTabMenuEntries", () => {
     expect(onMarkUnread).toHaveBeenCalledWith(tab);
   });
 
-  it("inserts mark as read before close-before when attention is clearable", () => {
-    const onMarkAsRead = vi.fn();
-    const tab = createAgentTab();
+  it("does not offer a mark-read entry even when unread is available", () => {
     const entries = buildWorkspaceTabMenuEntries({
       surface: "desktop",
-      tab,
+      tab: createAgentTab(),
       index: 0,
       tabCount: 1,
       menuTestIDBase: "workspace-tab-context-agent_123",
@@ -421,18 +419,11 @@ describe("buildWorkspaceTabMenuEntries", () => {
       onCloseTabsBefore: vi.fn(),
       onCloseTabsAfter: vi.fn(),
       onCloseOtherTabs: vi.fn(),
-      attentionAction: "read",
-      onMarkAsRead,
+      canMarkUnread: true,
+      onMarkUnread: vi.fn(),
     });
 
-    const item = entries.find((entry) => entry.kind === "item" && entry.key === "mark-read");
-    if (!item || item.kind !== "item") {
-      throw new Error("mark-read entry missing");
-    }
-    expect(item.label).toBe("Mark as read");
-    expect(item.icon).toBe("circle-check");
-    item.onSelect();
-    expect(onMarkAsRead).toHaveBeenCalledWith(tab);
+    expect(entries.some((entry) => entry.kind === "item" && entry.key === "mark-read")).toBe(false);
   });
 
   it("omits attention actions for file tabs even when handlers are passed", () => {
@@ -457,9 +448,8 @@ describe("buildWorkspaceTabMenuEntries", () => {
       onCloseTabsBefore: vi.fn(),
       onCloseTabsAfter: vi.fn(),
       onCloseOtherTabs: vi.fn(),
-      attentionAction: "unread",
+      canMarkUnread: true,
       onMarkUnread: vi.fn(),
-      onMarkAsRead: vi.fn(),
     });
 
     expect(entries.some((entry) => entry.kind === "item" && entry.key === "mark-unread")).toBe(

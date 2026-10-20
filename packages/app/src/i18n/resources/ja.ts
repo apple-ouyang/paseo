@@ -654,7 +654,6 @@ export const ja: TranslationResources = {
         reloadAgentTooltip:
           "スキル、MCP、ログイン状態を更新するためにエージェントを再読み込みします。",
         markAsUnread: "未読にする",
-        markAsRead: "既読にする",
         close: "閉じる",
         renameTerminal: "ターミナルの名前を変更",
         renameAgent: "エージェントの名前を変更",

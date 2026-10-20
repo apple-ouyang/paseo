@@ -19,11 +19,7 @@ import {
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
 import { useSessionStore } from "@/stores/session-store";
 import { useToast } from "@/contexts/toast-context";
-import {
-  markAgentTabRead,
-  markAgentTabUnread,
-  resolveAgentTabAttentionAction,
-} from "@/workspace/mark-unread";
+import { canMarkAgentTabUnread, markAgentTabUnread } from "@/workspace/mark-unread";
 
 // The trigger draws at 32pt beside its island neighbours, so only vertical slop is free.
 const TAB_SWITCHER_TRIGGER_HIT_SLOP = { top: 8, bottom: 8 } as const;
@@ -198,7 +194,7 @@ function MobileWorkspaceTabOption({
     const session = state.sessions[normalizedServerId];
     return session?.agents.get(agentId) ?? session?.agentDetails.get(agentId) ?? null;
   });
-  const attentionAction = resolveAgentTabAttentionAction(agent);
+  const canMarkUnread = canMarkAgentTabUnread(agent);
   const handleMarkUnread = useCallback(() => {
     if (!agentId) {
       return;
@@ -209,17 +205,11 @@ function MobileWorkspaceTabOption({
       agentId,
       tabId: tab.tabId,
     }).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : t("workspace.terminal.hostDisconnected"));
+      toast.error(
+        error instanceof Error ? error.message : t("workspace.terminal.hostDisconnected"),
+      );
     });
   }, [agentId, normalizedServerId, normalizedWorkspaceId, t, tab.tabId, toast]);
-  const handleMarkAsRead = useCallback(() => {
-    if (!agentId) {
-      return;
-    }
-    void markAgentTabRead(normalizedServerId, agentId).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : t("workspace.terminal.hostDisconnected"));
-    });
-  }, [agentId, normalizedServerId, t, toast]);
   const tabMenuLabels = useMemo<WorkspaceTabMenuLabels>(
     () => ({
       copyResumeCommand: t("workspace.tabs.menu.copyResumeCommand"),
@@ -233,7 +223,6 @@ function MobileWorkspaceTabOption({
       closeRight: t("workspace.tabs.menu.closeRight"),
       closeOthers: t("workspace.tabs.menu.closeOthers"),
       markAsUnread: t("workspace.tabs.menu.markAsUnread"),
-      markAsRead: t("workspace.tabs.menu.markAsRead"),
       reloadAgent: t("workspace.tabs.menu.reloadAgent"),
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
       close: t("workspace.tabs.menu.close"),
@@ -257,9 +246,8 @@ function MobileWorkspaceTabOption({
     onCloseTabsBefore: onCloseTabsAbove,
     onCloseTabsAfter: onCloseTabsBelow,
     onCloseOtherTabs,
-    attentionAction,
+    canMarkUnread,
     onMarkUnread: handleMarkUnread,
-    onMarkAsRead: handleMarkAsRead,
     labels: tabMenuLabels,
   });
 

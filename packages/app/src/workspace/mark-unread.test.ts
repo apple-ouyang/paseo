@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MARK_AGENT_UNREAD_LABEL,
-  markAgentTabRead,
+  canMarkAgentTabUnread,
   markAgentTabUnread,
-  resolveAgentTabAttentionAction,
 } from "@/workspace/mark-unread";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
@@ -28,7 +27,6 @@ const getClient = vi.fn();
 const unfocusPane = vi.fn();
 const restorePaneFocus = vi.fn();
 const updateAgent = vi.fn();
-const clearAgentAttention = vi.fn();
 
 function layoutState(focusedTabId: string | null) {
   return {
@@ -50,66 +48,66 @@ function layoutState(focusedTabId: string | null) {
   };
 }
 
-describe("resolveAgentTabAttentionAction", () => {
-  it("returns unread for idle agents without attention", () => {
+describe("canMarkAgentTabUnread", () => {
+  it("allows idle agents without attention", () => {
     expect(
-      resolveAgentTabAttentionAction({
+      canMarkAgentTabUnread({
         status: "idle",
         requiresAttention: false,
         attentionReason: null,
         pendingPermissions: [],
       }),
-    ).toBe("unread");
+    ).toBe(true);
   });
 
-  it("returns unread for closed agents", () => {
+  it("allows closed agents", () => {
     expect(
-      resolveAgentTabAttentionAction({
+      canMarkAgentTabUnread({
         status: "closed",
         requiresAttention: false,
       }),
-    ).toBe("unread");
+    ).toBe(true);
   });
 
-  it("returns read for finished or error attention", () => {
+  it("allows re-marking finished or error attention as unread", () => {
     expect(
-      resolveAgentTabAttentionAction({
+      canMarkAgentTabUnread({
         status: "idle",
         requiresAttention: true,
         attentionReason: "finished",
       }),
-    ).toBe("read");
+    ).toBe(true);
     expect(
-      resolveAgentTabAttentionAction({
+      canMarkAgentTabUnread({
         status: "idle",
         requiresAttention: true,
         attentionReason: "error",
       }),
-    ).toBe("read");
+    ).toBe(true);
   });
 
-  it("hides the action while running, pending permission, or archived", () => {
-    expect(resolveAgentTabAttentionAction({ status: "running" })).toBeNull();
+  it("disallows running, pending permission, or archived agents", () => {
+    expect(canMarkAgentTabUnread({ status: "running" })).toBe(false);
     expect(
-      resolveAgentTabAttentionAction({
+      canMarkAgentTabUnread({
         status: "idle",
         requiresAttention: true,
         attentionReason: "permission",
       }),
-    ).toBeNull();
+    ).toBe(false);
     expect(
-      resolveAgentTabAttentionAction({
+      canMarkAgentTabUnread({
         status: "idle",
         pendingPermissions: { size: 1 },
       }),
-    ).toBeNull();
+    ).toBe(false);
     expect(
-      resolveAgentTabAttentionAction({
+      canMarkAgentTabUnread({
         status: "idle",
         archivedAt: "2026-10-15T00:00:00.000Z",
       }),
-    ).toBeNull();
-    expect(resolveAgentTabAttentionAction(null)).toBeNull();
+    ).toBe(false);
+    expect(canMarkAgentTabUnread(null)).toBe(false);
   });
 });
 
@@ -119,11 +117,9 @@ describe("markAgentTabUnread", () => {
     unfocusPane.mockReset();
     restorePaneFocus.mockReset();
     updateAgent.mockReset();
-    clearAgentAttention.mockReset();
     unfocusPane.mockReturnValue("token");
     updateAgent.mockResolvedValue(undefined);
-    clearAgentAttention.mockResolvedValue(undefined);
-    getClient.mockReturnValue({ updateAgent, clearAgentAttention });
+    getClient.mockReturnValue({ updateAgent });
     vi.mocked(getHostRuntimeStore).mockReturnValue({
       getClient,
     } as never);
@@ -166,22 +162,5 @@ describe("markAgentTabUnread", () => {
       }),
     ).rejects.toThrow("offline");
     expect(restorePaneFocus).toHaveBeenCalledWith("srv:ws", "token");
-  });
-});
-
-describe("markAgentTabRead", () => {
-  beforeEach(() => {
-    getClient.mockReset();
-    clearAgentAttention.mockReset();
-    clearAgentAttention.mockResolvedValue(undefined);
-    getClient.mockReturnValue({ updateAgent, clearAgentAttention });
-    vi.mocked(getHostRuntimeStore).mockReturnValue({
-      getClient,
-    } as never);
-  });
-
-  it("clears agent attention", async () => {
-    await markAgentTabRead("srv", "agent-1");
-    expect(clearAgentAttention).toHaveBeenCalledWith("agent-1");
   });
 });

@@ -6,7 +6,6 @@ import {
   ArrowLeftToLine,
   ArrowRightToLine,
   Circle,
-  CircleCheck,
   Copy,
   CopyX,
   Ellipsis,
@@ -32,7 +31,6 @@ const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedCircle = withUnistyles(Circle);
-const ThemedCircleCheck = withUnistyles(CircleCheck);
 const ThemedX = withUnistyles(X);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -65,8 +63,6 @@ function MobileTabDropdownMenuItem({
         return <ThemedPencil size={16} uniProps={mutedColorMapping} />;
       case "circle":
         return <ThemedCircle size={16} uniProps={mutedColorMapping} />;
-      case "circle-check":
-        return <ThemedCircleCheck size={16} uniProps={mutedColorMapping} />;
       case "x":
         return <ThemedX size={16} uniProps={mutedColorMapping} />;
       default:

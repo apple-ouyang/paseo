@@ -15,7 +15,6 @@ import {
   ArrowLeftToLine,
   ArrowRightToLine,
   Circle,
-  CircleCheck,
   Copy,
   Pencil,
   RotateCw,
@@ -89,11 +88,7 @@ import {
 } from "@/components/ui/horizontal-scroll-boundary";
 import { useSessionStore } from "@/stores/session-store";
 import { useToast } from "@/contexts/toast-context";
-import {
-  markAgentTabRead,
-  markAgentTabUnread,
-  resolveAgentTabAttentionAction,
-} from "@/workspace/mark-unread";
+import { canMarkAgentTabUnread, markAgentTabUnread } from "@/workspace/mark-unread";
 
 const DROPDOWN_WIDTH = 220;
 const DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH = 36;
@@ -133,7 +128,6 @@ const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedCircle = withUnistyles(Circle);
-const ThemedCircleCheck = withUnistyles(CircleCheck);
 const ThemedPlus = withUnistyles(Plus);
 const ThemedColumns2 = withUnistyles(Columns2);
 const ThemedRows2 = withUnistyles(Rows2);
@@ -440,8 +434,6 @@ function TabContextMenuItem({
         return <ThemedPencil size={16} uniProps={mutedColorMapping} />;
       case "circle":
         return <ThemedCircle size={16} uniProps={mutedColorMapping} />;
-      case "circle-check":
-        return <ThemedCircleCheck size={16} uniProps={mutedColorMapping} />;
       case "x":
         return <ThemedX size={16} uniProps={mutedColorMapping} />;
       default:
@@ -1127,7 +1119,6 @@ function ResolvedWorkspaceDesktopTabsRow({
       closeRight: t("workspace.tabs.menu.closeRight"),
       closeOthers: t("workspace.tabs.menu.closeOthers"),
       markAsUnread: t("workspace.tabs.menu.markAsUnread"),
-      markAsRead: t("workspace.tabs.menu.markAsRead"),
       reloadAgent: t("workspace.tabs.menu.reloadAgent"),
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
       close: t("workspace.tabs.menu.close"),
@@ -1326,6 +1317,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       layout.closeButtonPolicy,
       layout.items,
       normalizedServerId,
+      normalizedWorkspaceId,
       onCloseOtherTabs,
       onCloseTab,
       onCloseTabsToLeft,
@@ -1510,7 +1502,7 @@ function ResolvedDesktopTabChip({
     const session = state.sessions[serverId];
     return session?.agents.get(agentId) ?? session?.agentDetails.get(agentId) ?? null;
   });
-  const attentionAction = resolveAgentTabAttentionAction(agent);
+  const canMarkUnread = canMarkAgentTabUnread(agent);
   const handleMarkUnread = useCallback(() => {
     if (!agentId) {
       return;
@@ -1521,17 +1513,11 @@ function ResolvedDesktopTabChip({
       agentId,
       tabId: item.tab.tabId,
     }).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : t("workspace.terminal.hostDisconnected"));
+      toast.error(
+        error instanceof Error ? error.message : t("workspace.terminal.hostDisconnected"),
+      );
     });
   }, [agentId, item.tab.tabId, serverId, t, toast, workspaceId]);
-  const handleMarkAsRead = useCallback(() => {
-    if (!agentId) {
-      return;
-    }
-    void markAgentTabRead(serverId, agentId).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : t("workspace.terminal.hostDisconnected"));
-    });
-  }, [agentId, serverId, t, toast]);
   const resolvedTab = useMemo(
     () =>
       buildWorkspaceDesktopTabActions({
@@ -1548,9 +1534,8 @@ function ResolvedDesktopTabChip({
         onCloseTabsToLeft,
         onCloseTabsToRight,
         onCloseOtherTabs,
-        attentionAction,
+        canMarkUnread,
         onMarkUnread: handleMarkUnread,
-        onMarkAsRead: handleMarkAsRead,
         labels,
       }),
     [
@@ -1567,9 +1552,8 @@ function ResolvedDesktopTabChip({
       labels,
       onReloadAgent,
       onRenameTab,
-      attentionAction,
+      canMarkUnread,
       handleMarkUnread,
-      handleMarkAsRead,
       tabCount,
     ],
   );
