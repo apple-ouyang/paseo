@@ -10,6 +10,8 @@ const OUTSIDE_FILE_NAME = "outside-plan.md";
 const OUTSIDE_FILE_MARKER = "outside-workspace-marker-7f3a";
 const HIDDEN_FILE_NAME = ".hidden-plan.md";
 const HIDDEN_FILE_MARKER = "hidden-outside-workspace-marker-91c4";
+const PARTIAL_HIDDEN_FILE_NAME = ".partial-plan.md";
+const PARTIAL_HIDDEN_FILE_MARKER = "partial-hidden-outside-workspace-marker-4d1e";
 
 test.use({
   userAgent:
@@ -82,6 +84,32 @@ test("file search opens a hidden file outside the workspace by its absolute path
       fileName: HIDDEN_FILE_NAME,
     });
     await expect(page.getByText(HIDDEN_FILE_MARKER)).toBeVisible({ timeout: 30_000 });
+  } finally {
+    await outside.cleanup();
+    await seeded.cleanup();
+  }
+});
+
+test("file search finds a partially typed hidden name outside the workspace", async ({ page }) => {
+  test.setTimeout(120_000);
+  const seeded = await seedWorkspace({
+    repoPrefix: "command-center-partial-hidden-",
+    title: "Partial hidden name search",
+  });
+  const outside = await createTempDirectory("paseo-outside-partial-");
+  const hiddenFile = path.join(outside.path, PARTIAL_HIDDEN_FILE_NAME);
+  await writeFile(hiddenFile, `# ${PARTIAL_HIDDEN_FILE_MARKER}\n`);
+
+  try {
+    await gotoWorkspace(page, seeded.workspaceId);
+    // Only the prefix is typed: discovery drops hidden names and the full path does not exist yet,
+    // so the row can only come from listing the parent directory.
+    await openFileByTypedPath(page, {
+      typedPath: path.join(outside.path, ".partial"),
+      expectedPath: hiddenFile,
+      fileName: PARTIAL_HIDDEN_FILE_NAME,
+    });
+    await expect(page.getByText(PARTIAL_HIDDEN_FILE_MARKER)).toBeVisible({ timeout: 30_000 });
   } finally {
     await outside.cleanup();
     await seeded.cleanup();

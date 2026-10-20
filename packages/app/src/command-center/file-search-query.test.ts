@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isNamedFileSuggestion,
+  matchHiddenListingEntries,
   planDaemonFileSearchRequest,
   resolveSuggestedFilePath,
 } from "./file-search-query";
@@ -45,6 +46,7 @@ describe("planDaemonFileSearchRequest", () => {
         query: "./plan.html",
         root: "/Users/me/.agent/diagrams",
       },
+      hiddenListing: null,
       namedPath: "/Users/me/.agent/diagrams/plan.html",
     });
   });
@@ -60,6 +62,32 @@ describe("planDaemonFileSearchRequest", () => {
     expect(plan?.namedPath).toBe("/tmp/private/.env");
   });
 
+  it("lists the parent directory for a partial hidden name", () => {
+    // `~/.zsh` matches neither discovery (hidden) nor retrieval (no such file), so the parent has
+    // to be listed. The typed prefix is carried by the listing request's query.
+    expect(planDaemonFileSearchRequest({ query: "~/.zsh" })).toEqual({
+      list: { cwd: "~", query: ".zsh", root: "~" },
+      exact: { cwd: "~", query: "./.zsh", root: "~" },
+      hiddenListing: { cwd: "~", query: "", root: "~" },
+      namedPath: "~/.zsh",
+    });
+    expect(
+      planDaemonFileSearchRequest({ query: "/tmp/private/.env", workspaceRoot: "/code/app" }),
+    ).toMatchObject({ hiddenListing: { cwd: "/tmp/private", query: "", root: "/tmp/private" } });
+  });
+
+  it("does not list the parent directory for a visible name", () => {
+    expect(
+      planDaemonFileSearchRequest({ query: "~/notes/todo.md", workspaceRoot: "/code/app" })
+        ?.hiddenListing,
+    ).toBeNull();
+  });
+
+  it("treats dot segments as segments, not hidden names", () => {
+    expect(planDaemonFileSearchRequest({ query: "~/.." })?.hiddenListing).toBeNull();
+    expect(planDaemonFileSearchRequest({ query: "~" })?.hiddenListing).toBeNull();
+  });
+
   it("browses the typed directory itself when the query ends with a separator", () => {
     expect(
       planDaemonFileSearchRequest({
@@ -69,11 +97,13 @@ describe("planDaemonFileSearchRequest", () => {
     ).toEqual({
       list: { cwd: "/Users/me/.agent/diagrams", query: "", root: "/Users/me/.agent/diagrams" },
       exact: null,
+      hiddenListing: null,
       namedPath: "/Users/me/.agent/diagrams",
     });
     expect(planDaemonFileSearchRequest({ query: "/", workspaceRoot: "/code/app" })).toEqual({
       list: { cwd: "/", query: "", root: "/" },
       exact: null,
+      hiddenListing: null,
       namedPath: "/",
     });
   });
@@ -88,6 +118,7 @@ describe("planDaemonFileSearchRequest", () => {
     ).toEqual({
       list: { cwd: "/code/other", query: "plan.md", root: "/code/other" },
       exact: { cwd: "/code/other", query: "./plan.md", root: "/code/other" },
+      hiddenListing: null,
       namedPath: "/code/other/plan.md",
     });
     expect(
@@ -101,6 +132,7 @@ describe("planDaemonFileSearchRequest", () => {
     ).toEqual({
       list: { cwd: "/tmp", query: "notes.md", root: "/tmp" },
       exact: { cwd: "/tmp", query: "./notes.md", root: "/tmp" },
+      hiddenListing: null,
       namedPath: "/tmp/notes.md",
     });
   });
@@ -109,11 +141,13 @@ describe("planDaemonFileSearchRequest", () => {
     expect(planDaemonFileSearchRequest({ query: "~/.agent/diagrams/plan.html" })).toEqual({
       list: { cwd: "~/.agent/diagrams", query: "plan.html", root: "~/.agent/diagrams" },
       exact: { cwd: "~/.agent/diagrams", query: "./plan.html", root: "~/.agent/diagrams" },
+      hiddenListing: null,
       namedPath: "~/.agent/diagrams/plan.html",
     });
     expect(planDaemonFileSearchRequest({ query: "~/", workspaceRoot: "/code/app" })).toEqual({
       list: { cwd: "~", query: "", root: "~" },
       exact: null,
+      hiddenListing: null,
       namedPath: "~",
     });
   });
@@ -124,6 +158,7 @@ describe("planDaemonFileSearchRequest", () => {
     ).toEqual({
       list: { cwd: "~/notes", query: "todo.md", root: "~/notes" },
       exact: { cwd: "~/notes", query: "./todo.md", root: "~/notes" },
+      hiddenListing: null,
       namedPath: "~/notes/todo.md",
     });
   });
@@ -138,16 +173,19 @@ describe("planDaemonFileSearchRequest", () => {
     ).toEqual({
       list: { cwd: "~/../other", query: "plan.md", root: "~/../other" },
       exact: { cwd: "~/../other", query: "./plan.md", root: "~/../other" },
+      hiddenListing: null,
       namedPath: "~/../other/plan.md",
     });
     expect(planDaemonFileSearchRequest({ query: "~/foo/../bar" })).toEqual({
       list: { cwd: "~", query: "bar", root: "~" },
       exact: { cwd: "~", query: "./bar", root: "~" },
+      hiddenListing: null,
       namedPath: "~/bar",
     });
     expect(planDaemonFileSearchRequest({ query: "~/.." })).toEqual({
       list: { cwd: "~", query: "..", root: "~" },
       exact: { cwd: "~", query: "./..", root: "~" },
+      hiddenListing: null,
       namedPath: "~/..",
     });
   });
@@ -161,12 +199,14 @@ describe("planDaemonFileSearchRequest", () => {
     ).toEqual({
       list: { cwd: "C:/Users/me", query: "plan.html", root: "C:/Users/me" },
       exact: { cwd: "C:/Users/me", query: "./plan.html", root: "C:/Users/me" },
+      hiddenListing: null,
       namedPath: "C:/Users/me/plan.html",
     });
     // `C:` alone means "the current directory on drive C", not the drive root.
     expect(planDaemonFileSearchRequest({ query: "C:/", workspaceRoot: "C:/code/app" })).toEqual({
       list: { cwd: "C:/", query: "", root: "C:/" },
       exact: null,
+      hiddenListing: null,
       namedPath: "C:/",
     });
     expect(
@@ -174,6 +214,7 @@ describe("planDaemonFileSearchRequest", () => {
     ).toEqual({
       list: { cwd: "C:/", query: "plan.html", root: "C:/" },
       exact: { cwd: "C:/", query: "./plan.html", root: "C:/" },
+      hiddenListing: null,
       namedPath: "C:/plan.html",
     });
   });
@@ -182,6 +223,7 @@ describe("planDaemonFileSearchRequest", () => {
     expect(planDaemonFileSearchRequest({ query: "/tmp/notes.md" })).toEqual({
       list: { cwd: "/tmp", query: "notes.md", root: "/tmp" },
       exact: { cwd: "/tmp", query: "./notes.md", root: "/tmp" },
+      hiddenListing: null,
       namedPath: "/tmp/notes.md",
     });
   });
@@ -228,6 +270,47 @@ describe("isNamedFileSuggestion", () => {
         namedPath: "/tmp/private/.env",
       }),
     ).toBe(false);
+  });
+});
+
+describe("matchHiddenListingEntries", () => {
+  const entries = [
+    { name: ".zshrc", kind: "file" },
+    { name: ".zshenv", kind: "file" },
+    { name: ".zsh_history", kind: "file" },
+    { name: ".zcompdump", kind: "file" },
+    { name: ".zsh", kind: "directory" },
+    { name: "notes.md", kind: "file" },
+  ];
+
+  it("keeps only the entries that start with the typed prefix", () => {
+    expect(
+      matchHiddenListingEntries({ entries, typedName: ".zsh", limit: 100 }).map((e) => e.name),
+    ).toEqual([".zshrc", ".zshenv", ".zsh_history"]);
+  });
+
+  it("ignores directories, so a same-named folder cannot shadow the file", () => {
+    expect(
+      matchHiddenListingEntries({ entries, typedName: ".zsh", limit: 100 }).some(
+        (e) => e.name === ".zsh",
+      ),
+    ).toBe(false);
+  });
+
+  it("respects the limit", () => {
+    expect(matchHiddenListingEntries({ entries, typedName: ".zsh", limit: 2 })).toHaveLength(2);
+  });
+
+  it("matches case-insensitively", () => {
+    expect(
+      matchHiddenListingEntries({ entries, typedName: ".ZSH", limit: 100 }).map((e) => e.name),
+    ).toEqual([".zshrc", ".zshenv", ".zsh_history"]);
+  });
+
+  it("keeps every dotfile for a bare dot", () => {
+    expect(
+      matchHiddenListingEntries({ entries, typedName: ".", limit: 100 }).map((e) => e.name),
+    ).toEqual([".zshrc", ".zshenv", ".zsh_history", ".zcompdump"]);
   });
 });
 

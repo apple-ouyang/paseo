@@ -28,6 +28,12 @@ export interface DaemonFileSearchPlan {
    * path spelled out is the daemon's supported way to resolve a named entry.
    */
   exact: DaemonFileSearchRequest | null;
+  /**
+   * Directory to list when the typed name is hidden. A partial hidden name (`~/.zsh` for
+   * `~/.zshrc`) is neither a discovery candidate nor an existing path, so only a plain directory
+   * listing can offer it. Null when the name is not hidden.
+   */
+  hiddenListing: DaemonFileSearchRequest | null;
   /** The path the user typed, collapsed: the only path `exact` may legitimately return. */
   namedPath: string;
 }
@@ -70,7 +76,12 @@ export function planDaemonFileSearchRequest(input: {
   const browsed = collapsed.replace(TRAILING_SEPARATORS, "");
   if (!browsed || browsed === "~" || TRAILING_SEPARATORS.test(typed)) {
     const root = toDirectoryRoot(browsed);
-    return { list: { cwd: root, query: "", root }, exact: null, namedPath: collapsed };
+    return {
+      list: { cwd: root, query: "", root },
+      exact: null,
+      hiddenListing: null,
+      namedPath: collapsed,
+    };
   }
 
   const separator = browsed.lastIndexOf("/");
@@ -80,9 +91,14 @@ export function planDaemonFileSearchRequest(input: {
   }
   const root = toDirectoryRoot(parent);
   const name = browsed.slice(separator + 1);
+  // A leading dot makes the name invisible to discovery *and* absent from any listing until it is
+  // spelled out, so a partial hidden name needs the parent directory read directly. `.` and `..`
+  // are segments, not names.
+  const hiddenName = name.startsWith(".") && name !== "." && name !== "..";
   return {
     list: { cwd: root, query: name, root },
     exact: { cwd: root, query: `./${name}`, root },
+    hiddenListing: hiddenName ? { cwd: root, query: "", root } : null,
     namedPath: collapsed,
   };
 }
@@ -120,4 +136,25 @@ export function resolveSuggestedFilePath(input: { root: string; path: string }):
     return input.root;
   }
   return input.root.endsWith("/") ? `${input.root}${relative}` : `${input.root}/${relative}`;
+}
+
+/**
+ * Picks the directory entries a partial hidden query should offer. The listing itself is
+ * unfiltered, so the typed prefix decides: `~/.zsh` keeps `.zshrc` and `.zshenv`, and a bare
+ * `~/.` would keep every dotfile.
+ */
+export function matchHiddenListingEntries(input: {
+  entries: readonly { name: string; kind: string }[];
+  typedName: string;
+  limit: number;
+}): { name: string; kind: string }[] {
+  const prefix = input.typedName.toLowerCase();
+  const matches: { name: string; kind: string }[] = [];
+  for (const entry of input.entries) {
+    if (matches.length >= input.limit) break;
+    if (entry.kind !== "file") continue;
+    if (!entry.name.toLowerCase().startsWith(prefix)) continue;
+    matches.push(entry);
+  }
+  return matches;
 }
