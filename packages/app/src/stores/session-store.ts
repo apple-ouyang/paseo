@@ -53,6 +53,7 @@ import {
   buildWorkspaceAgentActivityIndex,
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
+import { useProviderSubagentStore } from "@/subagents/provider-store";
 import {
   resolveTurnPresentation,
   TURN_LIVENESS_IDLE,
@@ -1504,6 +1505,7 @@ export const useSessionStore = create<SessionStore>()(
                 workspaceAgentActivity: buildWorkspaceAgentActivityIndex(
                   nextAgents,
                   session.workspaceAgentActivity,
+                  useProviderSubagentStore.getState().descriptors.values(),
                 ),
               },
             },
@@ -1908,3 +1910,30 @@ export function useWorkspaceRestoreStatus(
       : null,
   );
 }
+
+// Provider subagents live in a separate store, so their start/finish does not
+// reach setAgents. Rebuild the workspace activity index whenever the descriptor
+// map changes so running subagents keep ancestor workspaces in the running
+// state; unchanged indexes keep their previous object and skip re-renders.
+useProviderSubagentStore.subscribe((state, prev) => {
+  if (state.descriptors === prev.descriptors) {
+    return;
+  }
+  useSessionStore.setState((sessionState) => {
+    const sessions = { ...sessionState.sessions };
+    let changed = false;
+    for (const serverId of Object.keys(sessions)) {
+      const session = sessions[serverId];
+      const next = buildWorkspaceAgentActivityIndex(
+        session.agents,
+        session.workspaceAgentActivity,
+        state.descriptors.values(),
+      );
+      if (next !== session.workspaceAgentActivity) {
+        sessions[serverId] = { ...session, workspaceAgentActivity: next };
+        changed = true;
+      }
+    }
+    return changed ? { sessions } : sessionState;
+  });
+});
