@@ -1919,21 +1919,26 @@ useProviderSubagentStore.subscribe((state, prev) => {
   if (state.descriptors === prev.descriptors) {
     return;
   }
-  useSessionStore.setState((sessionState) => {
-    const sessions = { ...sessionState.sessions };
-    let changed = false;
-    for (const serverId of Object.keys(sessions)) {
-      const session = sessions[serverId];
-      const next = buildWorkspaceAgentActivityIndex(
-        session.agents,
-        session.workspaceAgentActivity,
-        state.descriptors.values(),
-      );
-      if (next !== session.workspaceAgentActivity) {
-        sessions[serverId] = { ...session, workspaceAgentActivity: next };
-        changed = true;
+  // Defer out of this store's synchronous notify: writing another store inside
+  // it can land between concurrent-render chunks and trip the
+  // useSyncExternalStore consistency-check re-render.
+  setTimeout(() => {
+    useSessionStore.setState((sessionState) => {
+      const sessions = { ...sessionState.sessions };
+      let changed = false;
+      for (const serverId of Object.keys(sessions)) {
+        const session = sessions[serverId];
+        const next = buildWorkspaceAgentActivityIndex(
+          session.agents,
+          session.workspaceAgentActivity,
+          state.descriptors.values(),
+        );
+        if (next !== session.workspaceAgentActivity) {
+          sessions[serverId] = { ...session, workspaceAgentActivity: next };
+          changed = true;
+        }
       }
-    }
-    return changed ? { sessions } : sessionState;
-  });
+      return changed ? { sessions } : sessionState;
+    });
+  }, 0);
 });
