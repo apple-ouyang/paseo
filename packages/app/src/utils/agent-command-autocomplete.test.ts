@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import "@/test/window-local-storage";
+
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   applySlashCommandReplacement,
   filterAndRankCommandAutocompleteEntries,
   filterInlineSkillCommandEntries,
   findActiveSlashCommand,
+  recordSlashCommandUse,
+  resetSlashCommandMruCacheForTests,
 } from "./agent-command-autocomplete";
 
 describe("filterAndRankCommandAutocompleteEntries", () => {
@@ -132,5 +136,115 @@ describe("filterInlineSkillCommandEntries", () => {
     expect(filterInlineSkillCommandEntries(entries).map((entry) => entry.command.name)).toEqual([
       "taste",
     ]);
+  });
+});
+
+describe("slash command MRU ranking", () => {
+  const entries = [
+    { source: "provider" as const, command: { name: "paseo-committee" } },
+    { source: "provider" as const, command: { name: "commit" } },
+    { source: "provider" as const, command: { name: "paseo-advisor" } },
+  ];
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+  const names = (list: { command: { name: string } }[]) => list.map((entry) => entry.command.name);
+
+  const seed = (table: Record<string, number>) => {
+    window.localStorage.setItem("paseo.slash-command-mru.v1", JSON.stringify(table));
+    resetSlashCommandMruCacheForTests();
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetSlashCommandMruCacheForTests();
+  });
+
+  it("keeps the provider order when nothing has been used", () => {
+    expect(names(filterAndRankCommandAutocompleteEntries(entries, ""))).toEqual([
+      "paseo-committee",
+      "commit",
+      "paseo-advisor",
+    ]);
+  });
+
+  it("leads the menu with the most recently used command", () => {
+    const now = Date.now();
+    seed({ commit: now - 2 * HOUR, "paseo-advisor": now - HOUR });
+
+    expect(names(filterAndRankCommandAutocompleteEntries(entries, ""))).toEqual([
+      "paseo-advisor",
+      "commit",
+      "paseo-committee",
+    ]);
+  });
+
+  it("keeps a stale command above one that was never used", () => {
+    const now = Date.now();
+    seed({ "paseo-committee": now - 400 * DAY });
+
+    expect(names(filterAndRankCommandAutocompleteEntries(entries, ""))).toEqual([
+      "paseo-committee",
+      "commit",
+      "paseo-advisor",
+    ]);
+  });
+
+  it("breaks equally ranked matches by recency", () => {
+    const sameTier = [
+      { source: "provider" as const, command: { name: "alpha-labs" } },
+      { source: "provider" as const, command: { name: "alpha-beta" } },
+    ];
+    seed({ "alpha-beta": Date.now() - HOUR });
+
+    expect(names(filterAndRankCommandAutocompleteEntries(sameTier, "alpha"))).toEqual([
+      "alpha-beta",
+      "alpha-labs",
+    ]);
+  });
+
+  it("never lets recency outrank a better match tier", () => {
+    seed({ "paseo-committee": Date.now() });
+
+    expect(names(filterAndRankCommandAutocompleteEntries(entries, "comm"))).toEqual([
+      "commit",
+      "paseo-committee",
+    ]);
+  });
+
+  it("counts a use recorded through an alias", () => {
+    const aliased = [
+      { source: "client" as const, command: { name: "exit", aliases: ["quit", "q"] } },
+      { source: "client" as const, command: { name: "clear", aliases: ["new"] } },
+    ];
+    seed({ quit: Date.now() });
+
+    expect(names(filterAndRankCommandAutocompleteEntries(aliased, ""))).toEqual(["exit", "clear"]);
+  });
+
+  it("records a use under the canonical name and persists it", () => {
+    recordSlashCommandUse("/commit");
+    resetSlashCommandMruCacheForTests();
+
+    const raw = window.localStorage.getItem("paseo.slash-command-mru.v1") ?? "";
+    expect(JSON.parse(raw).commit).toEqual(expect.any(Number));
+    expect(names(filterAndRankCommandAutocompleteEntries(entries, ""))[0]).toEqual("commit");
+  });
+
+  it("works without local storage", () => {
+    const storage = window.localStorage;
+    Object.defineProperty(window, "localStorage", { value: undefined, configurable: true });
+    try {
+      resetSlashCommandMruCacheForTests();
+      expect(names(filterAndRankCommandAutocompleteEntries(entries, ""))).toEqual([
+        "paseo-committee",
+        "commit",
+        "paseo-advisor",
+      ]);
+      expect(() => recordSlashCommandUse("commit")).not.toThrow();
+      expect(names(filterAndRankCommandAutocompleteEntries(entries, ""))[0]).toEqual("commit");
+    } finally {
+      Object.defineProperty(window, "localStorage", { value: storage, configurable: true });
+      resetSlashCommandMruCacheForTests();
+    }
   });
 });

@@ -21,6 +21,7 @@ import {
   filterAndRankCommandAutocompleteEntries,
   filterInlineSkillCommandEntries,
   findActiveSlashCommand,
+  recordSlashCommandUse,
   type SlashCommandRange,
 } from "@/utils/agent-command-autocomplete";
 import {
@@ -522,6 +523,9 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
         selected.type === "plugin_command" ||
         selected.type === "provider_command";
       if (snapshot && selectedIsCommand && !current.slashCommand) return;
+      if (selectedIsCommand) {
+        recordSlashCommandUse(selected.id);
+      }
       if (
         selected.type === "client_command" &&
         selected.command.execution === "immediate" &&
