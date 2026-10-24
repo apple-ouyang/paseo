@@ -284,7 +284,7 @@ function quotaWindows(quota: DevinQuota): UsageWindow[] {
 function endpointFor(apiServer: string): string | null {
   try {
     const url = new URL(apiServer);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (url.protocol !== "https:") return null;
     return `${url.origin}${GET_USER_STATUS_PATH}`;
   } catch {
     return null;
@@ -299,7 +299,7 @@ export async function fetchUsage(
   if (!credentials) throw new Error("Devin login store no longer exists");
 
   const endpoint = endpointFor(credentials.apiServer);
-  if (!endpoint) throw new Error("Devin API server URL is not HTTP(S)");
+  if (!endpoint) throw new Error("Devin API server URL is not HTTPS");
 
   const res = await fetchApi(endpoint, {
     method: "POST",

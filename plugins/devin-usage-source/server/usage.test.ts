@@ -122,6 +122,22 @@ describe("fetchUsage", () => {
     expect(headers?.Authorization).toMatch(/^Basic /);
   });
 
+  it("refuses a non-HTTPS API server before sending the login", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "devin-usage-"));
+    tempDirs.push(dir);
+    const locator = join(dir, "credentials.toml");
+    writeFileSync(
+      locator,
+      [
+        'windsurf_api_key = "devin-session-token$test"',
+        'api_server_url = "http://server.example"',
+      ].join("\n"),
+    );
+    const fetchApi = vi.fn() as unknown as typeof fetch;
+    await expect(fetchUsage({ store: "file", locator }, fetchApi)).rejects.toThrow(/not HTTPS/);
+    expect(fetchApi).not.toHaveBeenCalled();
+  });
+
   it("maps a rejected login to an unavailable account", async () => {
     const locator = credentialsFile();
     const fetchApi = vi.fn(
