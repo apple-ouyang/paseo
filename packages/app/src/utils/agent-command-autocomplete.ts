@@ -57,6 +57,8 @@ const SLASH_COMMAND_MRU_STORAGE_KEY = "paseo.slash-command-mru.v1";
 const SLASH_COMMAND_MRU_LIMIT = 256;
 const RECENCY_HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000;
 const RECENCY_FLOOR = 0.1;
+/** `TIER_EXACT` in `@getpaseo/protocol/search/text-match`; lower tiers are worse. */
+const EXACT_MATCH_TIER = 0;
 
 type SlashCommandMruTable = Record<string, number>;
 
@@ -182,14 +184,25 @@ export function filterAndRankCommandAutocompleteEntries<TEntry extends CommandAu
   const table = readSlashCommandMru();
   const now = Date.now();
   scoredEntries.sort((a, b) => {
+    // Exact name first: typing the whole command and pressing Enter must hit it,
+    // even when another command was used more recently.
+    const aExact = a.score.tier === EXACT_MATCH_TIER;
+    const bExact = b.score.tier === EXACT_MATCH_TIER;
+    if (aExact !== bExact) return aExact ? -1 : 1;
+
+    // Recency then wins outright: a command the user actually runs leads the menu
+    // even when its match is one tier worse. A prefix match on an unused command
+    // no longer pins the list (that kept `/rev` on `review-loop` forever while the
+    // user only ever ran `skill:review-commit`).
+    const aRecency = recencyScoreFor(a.entry, table, now);
+    const bRecency = recencyScoreFor(b.entry, table, now);
+    if (aRecency > 0 !== bRecency > 0) return aRecency > 0 ? -1 : 1;
+    if (aRecency !== bRecency) return bRecency - aRecency;
+
+    // Never used (or a tie): fall back to match quality, then name for stability.
     const scoreComparison = compareMatchScores(a.score, b.score);
     if (scoreComparison !== 0) {
       return scoreComparison;
-    }
-    const recencyComparison =
-      recencyScoreFor(b.entry, table, now) - recencyScoreFor(a.entry, table, now);
-    if (recencyComparison !== 0) {
-      return recencyComparison;
     }
     return a.entry.command.name.localeCompare(b.entry.command.name);
   });

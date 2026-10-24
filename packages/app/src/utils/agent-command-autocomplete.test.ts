@@ -202,12 +202,38 @@ describe("slash command MRU ranking", () => {
     ]);
   });
 
-  it("never lets recency outrank a better match tier", () => {
+  it("lets a used command outrank a one-tier-worse match", () => {
     seed({ "paseo-committee": Date.now() });
 
     expect(names(filterAndRankCommandAutocompleteEntries(entries, "comm"))).toEqual([
+      "paseo-committee",
+      "commit",
+    ]);
+  });
+
+  it("keeps an exactly typed name first even when another command was just used", () => {
+    seed({ "paseo-committee": Date.now() });
+
+    expect(names(filterAndRankCommandAutocompleteEntries(entries, "commit"))).toEqual([
       "commit",
       "paseo-committee",
+    ]);
+  });
+
+  it("leads with the used command when the prefix match was never used", () => {
+    // 真实回归：输入 /rev 时 review-loop 是前缀命中、skill:review-commit 是词首命中，
+    // 旧规则让从没用过的 review-loop 永远排第一。
+    const realWorld = [
+      { source: "provider" as const, command: { name: "review-loop" } },
+      { source: "provider" as const, command: { name: "skill:review-commit" } },
+      { source: "provider" as const, command: { name: "skill:plan-ceo-review" } },
+    ];
+    seed({ "skill:review-commit": Date.now() });
+
+    expect(names(filterAndRankCommandAutocompleteEntries(realWorld, "rev"))).toEqual([
+      "skill:review-commit",
+      "review-loop",
+      "skill:plan-ceo-review",
     ]);
   });
 
