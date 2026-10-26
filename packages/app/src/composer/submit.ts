@@ -1,4 +1,5 @@
 import { i18n } from "@/i18n/i18next";
+import { recordSlashCommandsInText } from "@/utils/agent-command-autocomplete";
 
 export type AgentInputSubmitResult = "noop" | "queued" | "submitted" | "failed";
 
@@ -26,6 +27,8 @@ export async function submitAgentInput<TAttachment>(
   input: AgentInputSubmitActionInput<TAttachment>,
 ): Promise<AgentInputSubmitResult> {
   const trimmedMessage = input.message.trim();
+  // Submitting `/command` counts as use, so typing the whole name (no menu pick) reorders too.
+  recordSlashCommandsInText(trimmedMessage);
   const attachments = input.attachments;
   const shouldClearOnSubmit = input.submitBehavior !== "preserve-and-lock";
 

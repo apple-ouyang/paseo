@@ -8,6 +8,7 @@ import {
   filterInlineSkillCommandEntries,
   findActiveSlashCommand,
   recordSlashCommandUse,
+  recordSlashCommandsInText,
   resetSlashCommandMruCacheForTests,
 } from "./agent-command-autocomplete";
 
@@ -245,6 +246,25 @@ describe("slash command MRU ranking", () => {
     seed({ quit: Date.now() });
 
     expect(names(filterAndRankCommandAutocompleteEntries(aliased, ""))).toEqual(["exit", "clear"]);
+  });
+
+  it("records every /command in a submitted prompt", () => {
+    recordSlashCommandsInText("/skill:review-commit /review-loop 提交");
+    resetSlashCommandMruCacheForTests();
+
+    const raw = window.localStorage.getItem("paseo.slash-command-mru.v1") ?? "";
+    const table = JSON.parse(raw);
+    expect(table["skill:review-commit"]).toEqual(expect.any(Number));
+    expect(table["review-loop"]).toEqual(expect.any(Number));
+    // Ranking from a typed-only submit is covered by the /rev regression above.
+  });
+
+  it("ignores absolute paths in a submitted prompt", () => {
+    recordSlashCommandsInText("看下 /Users/admin/code/notes 这个目录");
+    resetSlashCommandMruCacheForTests();
+
+    const raw = window.localStorage.getItem("paseo.slash-command-mru.v1");
+    expect(raw === null ? {} : JSON.parse(raw)).toEqual({});
   });
 
   it("records a use under the canonical name and persists it", () => {

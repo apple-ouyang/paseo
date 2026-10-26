@@ -149,6 +149,23 @@ export function recordSlashCommandUse(name: string): void {
   persistSlashCommandMru(table);
 }
 
+/** `/command` tokens in a prompt body: line-start or after whitespace, command-shaped only. */
+const SLASH_COMMAND_IN_TEXT_RE = /(?:^|\s)\/([A-Za-z0-9][A-Za-z0-9:_-]{0,63})(?=\s|$)/g;
+
+/**
+ * Record every `/command` written in a submitted prompt.
+ *
+ * The menu only sees picks, so a user who types the whole command name never
+ * moves it up the list. Recording at submit time covers both: picking and typing.
+ * Paths (`/Users/...`) contain a `/` or `.` and never match the token pattern.
+ */
+export function recordSlashCommandsInText(text: string): void {
+  for (const match of text.matchAll(SLASH_COMMAND_IN_TEXT_RE)) {
+    const name = match[1];
+    if (name) recordSlashCommandUse(name);
+  }
+}
+
 /** Most-recently-used ordering; commands without history keep the order their provider sent. */
 export function rankCommandEntriesByRecency<TEntry extends CommandAutocompleteEntry>(
   entries: readonly TEntry[],
