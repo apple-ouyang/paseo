@@ -50,8 +50,11 @@ function closeTurn(turn: OpenTurn, into: Map<string, TurnTiming>): void {
     into.set(id, timing);
   }
   // Responses without an assistant text row anchor the footer on the turn's
-  // last visible item.
-  into.set(turn.lastItemId, timing);
+  // last visible item. A turn that is only its prompt has no response to
+  // attach a footer to, so it stays out of the timing map.
+  if (turn.previousItem && turn.previousItem.kind !== "user_message") {
+    into.set(turn.lastItemId, timing);
+  }
 }
 
 function walkTurns(
