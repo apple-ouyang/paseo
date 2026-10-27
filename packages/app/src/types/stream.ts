@@ -712,8 +712,6 @@ export interface AssistantMessageItem {
   text: string;
   timestamp: Date;
   /** Display-only fields, assigned after source-item plugin transforms. */
-  blockGroupId?: string;
-  blockIndex?: number;
 }
 
 export interface TimelinePosition {
@@ -773,6 +771,12 @@ export type AgentToolCallItem = ToolCallItem & {
   payload: { source: "agent"; data: AgentToolCallData };
 };
 
+/** Find and scrolling address a plugin row by the source it replaces. */
+export function getStreamItemMessageId(item: StreamItem): string {
+  if (item.kind === "plugin") return item.sourceId ?? item.id;
+  return item.id;
+}
+
 export function isAgentToolCallItem(item: StreamItem): item is AgentToolCallItem {
   return item.kind === "tool_call" && item.payload.source === "agent";
 }
@@ -804,6 +808,8 @@ export interface CompactionItem {
 export interface PluginTimelineStreamItem {
   kind: "plugin";
   id: string;
+  /** The id of the stream item a timeline transformer replaced; set only by projection. */
+  sourceId?: string;
   timelineCursor?: TimelinePosition;
   turnId?: string;
   timestamp: Date;
