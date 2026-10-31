@@ -13,6 +13,7 @@ import {
 import {
   classifyForResolution,
   fetchDaemonResolution,
+  resolveMissingNestedRelativeFile,
   type AssistantFileLinkResolution,
   type AssistantFileLinkSource,
   type AssistantFileLinkContext,
@@ -286,8 +287,13 @@ async function dispatchResolvedLink(input: {
 }) {
   const { value } = input.resolution;
   if (value.kind === "file") {
-    await dispatchFileTarget({
+    const target = await resolveMissingNestedRelativeFile({
       target: value.target,
+      workspaceRoot: input.capturedWorkspaceRoot,
+      getDirectorySuggestions: input.context.getDirectorySuggestions,
+    });
+    await dispatchFileTarget({
+      target,
       disposition: input.disposition,
       capturedServerId: input.capturedServerId,
       capturedWorkspaceRoot: input.capturedWorkspaceRoot,

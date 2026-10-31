@@ -105,6 +105,58 @@ export async function fetchDaemonResolution({
   };
 }
 
+/** Workspace-relative path that contains a directory segment.
+ * Bare names, absolute paths, `~/` paths, and paths outside the workspace
+ * return null so the click keeps today's direct open.
+ */
+export function nestedRelativeLookupQuery(
+  targetPath: string,
+  workspaceRoot: string | undefined,
+): string | null {
+  const root = workspaceRoot?.trim();
+  if (!root) {
+    return null;
+  }
+  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalizedPath = targetPath.replace(/\\/g, "/");
+  const prefix = `${normalizedRoot}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const relative = normalizedPath.slice(prefix.length);
+  if (!relative.includes("/")) {
+    return null;
+  }
+  return relative;
+}
+
+/** When a markdown link points at workspaceRoot/schema/x.md and that file is
+ * missing, ask the same suffix lookup bare names already use. An exact hit
+ * stays on that path. A suffix hit such as repo-a/schema/x.md replaces it.
+ * Lookup failure keeps the original target.
+ */
+export async function resolveMissingNestedRelativeFile(input: {
+  target: InlinePathTarget;
+  workspaceRoot?: string;
+  getDirectorySuggestions: GetDirectorySuggestions;
+}): Promise<InlinePathTarget> {
+  const query = nestedRelativeLookupQuery(input.target.path, input.workspaceRoot);
+  if (!query) {
+    return input.target;
+  }
+  try {
+    return await fetchDaemonResolution({
+      ambiguousQuery: query,
+      token: input.target.raw,
+      target: input.target,
+      workspaceRoot: input.workspaceRoot,
+      getDirectorySuggestions: input.getDirectorySuggestions,
+    });
+  } catch {
+    return input.target;
+  }
+}
+
 export function classifyForResolution(
   source: AssistantFileLinkSource,
   context: AssistantFileLinkContext,

@@ -7,6 +7,7 @@ import {
   classifyForResolution,
   fetchDaemonResolution,
   getAssistantFileLinkToken,
+  resolveMissingNestedRelativeFile,
   UnresolvedFileLinkError,
   type AssistantFileLinkContext,
   type DirectorySuggestionEntry,
@@ -421,6 +422,136 @@ describe("fetchDaemonResolution", () => {
         getDirectorySuggestions: unavailableSuggestions,
       }),
     ).rejects.toEqual(new UnresolvedFileLinkError("dumm.md"));
+  });
+});
+
+describe("resolveMissingNestedRelativeFile", () => {
+  const target = {
+    raw: "schema/x.md:12-14",
+    path: "/Users/test/project/schema/x.md",
+    lineStart: 12,
+    lineEnd: 14,
+  };
+
+  it("opens a nested-repo suffix when the workspace-root path is missing", async () => {
+    const { getDirectorySuggestions, searches } = suggestionsFromMap({
+      "schema/x.md": [{ path: "repo-a/schema/x.md", kind: "file" }],
+    });
+
+    const result = await resolveMissingNestedRelativeFile({
+      target,
+      workspaceRoot: "/Users/test/project",
+      getDirectorySuggestions,
+    });
+
+    expect(searches).toEqual([
+      {
+        query: "schema/x.md",
+        cwd: "/Users/test/project",
+        matchMode: "suffix",
+        limit: 1,
+      },
+    ]);
+    expect(result).toEqual({
+      ...target,
+      path: "/Users/test/project/repo-a/schema/x.md",
+    });
+  });
+
+  it("keeps the exact workspace path when suggestions return that relative path", async () => {
+    const { getDirectorySuggestions } = suggestionsFromMap({
+      "schema/x.md": [{ path: "schema/x.md", kind: "file" }],
+    });
+
+    const result = await resolveMissingNestedRelativeFile({
+      target,
+      workspaceRoot: "/Users/test/project",
+      getDirectorySuggestions,
+    });
+
+    expect(result).toEqual(target);
+  });
+
+  it("keeps the original target when suggestions are empty", async () => {
+    const { getDirectorySuggestions } = suggestionsFromMap({});
+
+    await expect(
+      resolveMissingNestedRelativeFile({
+        target,
+        workspaceRoot: "/Users/test/project",
+        getDirectorySuggestions,
+      }),
+    ).resolves.toEqual(target);
+  });
+
+  it("keeps the original target when the daemon throws", async () => {
+    await expect(
+      resolveMissingNestedRelativeFile({
+        target,
+        workspaceRoot: "/Users/test/project",
+        getDirectorySuggestions: unavailableSuggestions,
+      }),
+    ).resolves.toEqual(target);
+  });
+
+  it.each([
+    ["a bare filename", { ...target, path: "/Users/test/project/file.ts" }],
+    ["a path outside the workspace", { ...target, path: "/tmp/schema/x.md" }],
+    ["a home-relative path", { ...target, path: "~/schema/x.md" }],
+  ])("does not search %s", async (_label, candidate) => {
+    const { getDirectorySuggestions, searches } = suggestionsFromMap({
+      "schema/x.md": [{ path: "repo-a/schema/x.md", kind: "file" }],
+    });
+
+    const result = await resolveMissingNestedRelativeFile({
+      target: candidate,
+      workspaceRoot: "/Users/test/project",
+      getDirectorySuggestions,
+    });
+
+    expect(searches).toEqual([]);
+    expect(result).toEqual(candidate);
+  });
+
+  it("does not search when the workspace root is blank", async () => {
+    const { getDirectorySuggestions, searches } = suggestionsFromMap({});
+
+    const result = await resolveMissingNestedRelativeFile({
+      target,
+      workspaceRoot: "   ",
+      getDirectorySuggestions,
+    });
+
+    expect(searches).toEqual([]);
+    expect(result).toEqual(target);
+  });
+
+  it("normalizes a Windows workspace root before the suffix lookup", async () => {
+    const windowsTarget = {
+      raw: "schema/x.md",
+      path: "C:\\repo\\schema\\x.md",
+      lineStart: undefined,
+      lineEnd: undefined,
+    };
+    const { getDirectorySuggestions, searches } = suggestionsFromMap({
+      "schema/x.md": [{ path: "repo-a/schema/x.md", kind: "file" }],
+    });
+
+    const result = await resolveMissingNestedRelativeFile({
+      target: windowsTarget,
+      workspaceRoot: "C:\\repo\\",
+      getDirectorySuggestions,
+    });
+
+    expect(searches).toEqual([
+      {
+        query: "schema/x.md",
+        cwd: "C:\\repo\\",
+        matchMode: "suffix",
+        limit: 1,
+      },
+    ]);
+    expect(result.path).toBe("C:/repo/repo-a/schema/x.md");
   });
 });
 
