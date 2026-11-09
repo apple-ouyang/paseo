@@ -1988,6 +1988,12 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (!this.connection || !this.sessionId) {
       throw new Error(`${this.provider} session is not initialized`);
     }
+    if (this.connection.signal.aborted) {
+      throw new Error(
+        "ACP agent disconnected" +
+          (this.child?.exitCode != null ? ` (exit code ${this.child.exitCode})` : ""),
+      );
+    }
     if (this.activeForegroundTurnId) {
       throw new Error("A foreground turn is already active");
     }
@@ -2002,7 +2008,31 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
     this.emitSubmittedUserMessage(prompt, messageId, turnId, options?.clientMessageId);
 
-    void this.connection
+    // A write into a closed ACP transport never settles: the SDK swallows the write
+    // error and drops the response, so a turn started here would stay running forever.
+    // Fail the turn once the transport aborts, after the exit handler had its say.
+    const connection = this.connection;
+    const child = this.child;
+    const failAcpDisconnect = () =>
+      setTimeout(() => {
+        if (this.closed || this.activeForegroundTurnId !== turnId) {
+          return;
+        }
+        this.synthesizeCanceledToolCalls();
+        const error =
+          "ACP agent disconnected" +
+          (child?.exitCode != null ? ` (exit code ${child.exitCode})` : "");
+        this.finishTurn({
+          type: "turn_failed",
+          provider: this.provider,
+          error,
+          diagnostic: this.collectDiagnostic(error),
+          turnId,
+        });
+      }, 1_000);
+    connection.signal.addEventListener("abort", failAcpDisconnect, { once: true });
+
+    void connection
       .prompt({
         sessionId: this.sessionId,
         messageId,

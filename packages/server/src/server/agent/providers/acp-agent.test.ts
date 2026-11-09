@@ -3053,7 +3053,10 @@ describe("ACPAgentSession", () => {
     );
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event as { type: string; turnId?: string });
@@ -3091,7 +3094,10 @@ describe("ACPAgentSession", () => {
     );
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event);
@@ -3140,7 +3146,10 @@ describe("ACPAgentSession", () => {
     const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event);
@@ -3167,7 +3176,10 @@ describe("ACPAgentSession", () => {
     const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event);
@@ -3211,7 +3223,10 @@ describe("ACPAgentSession", () => {
     );
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event);
@@ -3272,7 +3287,10 @@ describe("ACPAgentSession", () => {
     const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event);
@@ -3311,7 +3329,10 @@ describe("ACPAgentSession", () => {
     const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event);
@@ -3364,7 +3385,10 @@ describe("ACPAgentSession", () => {
     const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event);
@@ -3413,7 +3437,10 @@ describe("ACPAgentSession", () => {
     );
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
 
     session.subscribe((event) => {
       events.push(event as { type: string; turnId?: string; error?: string });
@@ -3446,7 +3473,10 @@ describe("ACPAgentSession", () => {
     );
 
     asInternals<ACPSessionInternals>(session).sessionId = "session-1";
-    asInternals<ACPSessionInternals>(session).connection = { prompt };
+    asInternals<ACPSessionInternals>(session).connection = {
+      prompt,
+      signal: new AbortController().signal,
+    };
     session.subscribe((event) => events.push(event));
 
     const { turnId } = await session.startTurn([
