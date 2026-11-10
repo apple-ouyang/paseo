@@ -4093,12 +4093,50 @@ function buildEditToolDetail(context: MapToolDetailContext): ToolCallDetail {
 
 function buildSearchAcpToolDetail(context: MapToolDetailContext): ToolCallDetail {
   const { snapshot, textContent, rawInput, rawOutput } = context;
+  let query = readString(rawInput, ["query", "pattern"]);
+  const action = isRecord(rawOutput?.action) ? rawOutput.action : null;
+  if (!query && action) {
+    const actionQuery = readString(action, ["query"]);
+    if (actionQuery) query = actionQuery;
+  }
+  if (!query && rawOutput) {
+    let parsed: unknown = rawOutput.input;
+    if (typeof parsed === "string") {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        parsed = null;
+      }
+    }
+    if (isRecord(parsed)) {
+      const parsedQuery = readString(parsed, ["query"]);
+      if (parsedQuery) query = parsedQuery;
+    }
+  }
+  const sources = action && Array.isArray(action.sources) ? action.sources : [];
+  const webResults: Array<{ title: string; url: string }> = [];
+  for (const source of sources) {
+    if (!isRecord(source)) continue;
+    const url = readString(source, ["url", "link"]);
+    if (!url) continue;
+    let title = url;
+    try {
+      title = new URL(url).host || url;
+    } catch {
+      title = url;
+    }
+    webResults.push({ title, url });
+  }
+  const text = textContent ?? readString(rawOutput, ["content", "text"]);
+  const fallback =
+    !text && webResults.length === 0 && query && query !== snapshot.title ? query : undefined;
   return {
     type: "search",
-    query: readString(rawInput, ["query", "pattern"]) ?? snapshot.title,
+    query: query || snapshot.title,
     toolName: "search",
-    content: textContent ?? readString(rawOutput, ["content", "text"]),
+    content: text ?? fallback,
     filePaths: snapshot.locations?.map((location) => location.path),
+    ...(webResults.length > 0 && !text ? { webResults } : {}),
   };
 }
 
